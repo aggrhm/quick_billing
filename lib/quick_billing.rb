@@ -18,13 +18,23 @@ module QuickBilling
     class Railtie < Rails::Railtie
       initializer "quick_billing.configure" do
         config_file = Rails.root.join("config", "quick_billing.yml")
-        QuickNotify.configure(YAML.load_file(config_file)[Rails.env]) if File.exists?(config_file)
+        if File.exists?(config_file)
+          QuickNotify.configure(YAML.load_file(config_file)[Rails.env])
+        else
+          QuickNotify.configure
+        end
       end
     end
   end
 
-  def self.configure(opts)
-    @options = opts.with_indifferent_access unless opts.nil?
+  def self.configure(opts={})
+    @options = opts.with_indifferent_access
+    @options[:classes] ||= {}
+    @options[:classes][:subscription] ||= Subscription
+    @options[:classes][:billing_plan] ||= BillingPlan
+    @options[:classes][:transaction] ||= Transaction
+    @options[:classes][:accountable] ||= User
+    return @options
   end
 
   def self.options
@@ -34,7 +44,7 @@ module QuickBilling
   def self.platform
     case self.options[:platform]
     when :braintree
-      Platforms::BrainTree
+      Platforms::Braintree
     end
   end
 

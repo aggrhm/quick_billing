@@ -20,9 +20,6 @@ module QuickBilling
 
           mongoid_timestamps!
 
-          scope :with_key, lambda{|key|
-            where(ky: key)
-          }
         end
       end
 
@@ -33,6 +30,10 @@ module QuickBilling
         plan.price = price
         plan.save
         return plan
+      end
+
+      def with_key(key)
+        self.where(ky: key).first
       end
 
     end

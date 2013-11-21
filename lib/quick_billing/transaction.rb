@@ -3,7 +3,7 @@ module QuickBilling
   module Transaction
 
     TYPES = {charge: 1, payment: 2, credit: 3, refund: 4}
-    STATES = {processing: 1, cleared: 2, void: 3}
+    STATES = {entered: 1, processing: 2, completed: 3, void: 4}
 
     def self.included(base)
       base.extend ClassMethods
@@ -18,51 +18,88 @@ module QuickBilling
           field :tp, as: :type, type: Integer
           field :ds, as: :description, type: String
           field :am, as: :amount, type: Integer
-          field :pk, as: :plan_key, type: String
           field :st, as: :state, type: Integer
           field :st_at, as: :state_changed_at, type: Time
           field :mth, as: :meta, type: Hash, default: Hash.new
-          field :aid, as: :accountable_id, type: Moped::BSON::ObjectId
-          field :acl, as: :accountable_class, type: String
+          field :er, as: :error_message, type: String
+
+          belongs_to :subscription, :foreign_key => :sid, :class_name => 'Subscription'
+          belongs_to :account, :foreign_key => :aid, :class_name => 'BillingAccount'
 
           enum_methods! :type, TYPES
           enum_methods! :state, STATES
 
           mongoid_timestamps!
+
+          scope :for_account, lambda {|acct_id|
+            where(aid: acct_id)
+          }
+
+          scope :completed, lambda {
+            where(st: STATES[:completed])
+          }
         end
       end
 
-      def add_plan!(key, name, price)
-        plan = self.new
-        plan.key = key.to_s
-        plan.name = name
-        plan.price = price
-        plan.save
-        return plan
+      def enter_charge_for_subscription!(sub)
+        t = self.new
+        t.type! :charge
+        t.description = sub.plan.name
+        t.amount = sub.amount
+        t.state! :completed
+        t.account = sub.account
+        t.subscription = sub
+        if t.save
+          return {success: true, data: t}
+        else
+          return {success: false, data: t}
+        end
       end
 
-      def enter_charge_for_plan!(opts)
+      def enter_payment!(acct, amt, opts={})
+        success = false
+        t = self.new
+        t.type! :payment
+        t.description = "Payment"
+        t.amount = amt
+        t.state! :entered
+        t.account = acct
+        if t.save
+          if t.process_payment!
+            success = true
+          end
+        end
 
-      end
-
-      def enter_payment!(opts)
-
+        return {success: success, data: t}
       end
 
     end
 
     ## INSTANCE METHODS
 
-    def accountable
-      return nil if self.accountable_class.nil? || self.accountable_id.nil?
-      base = Object.const_get(self.accountable_class)
-      return base.find(self.accountable_id)
-    end
+    # ACCESSORS
 
-    def accountable=(val)
-      self.accountable_class = val.class.to_s
-      self.accountable_id = val.id
-      return val
+
+    # ACTIONS
+
+    def process_payment!
+      acct = t.account
+      result = QuickBilling.platform.send_payment(
+        amount: t.amount,
+        customer_id: acct.billing_info['customer_id']
+      )
+      if result[:success]
+        t.state! :completed
+        t.meta['transaction_id'] = result[:id]
+        t.save
+        return true
+      else
+        t.state! :void
+        t.meta['transaction_id'] = result[:id]
+        t.error_message = result[:error]
+        t.save
+        return false
+      end
     end
 
     def to_api(opt)
@@ -73,6 +110,7 @@ module QuickBilling
       ret[:description] = self.description
       ret[:amount] = self.amount
       ret[:state] = self.state
+      ret[:created_at] = self.created_at.to_i
 
       return ret
     end
