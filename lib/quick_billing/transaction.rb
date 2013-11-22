@@ -88,6 +88,8 @@ module QuickBilling
         amount: t.amount,
         customer_id: acct.billing_info['customer_id']
       )
+
+      t.meta['platform'] = QuickBilling.options[:platform]
       if result[:success]
         t.state! :completed
         t.meta['transaction_id'] = result[:id]

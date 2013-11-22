@@ -17,6 +17,7 @@ module QuickBilling
           field :pr, as: :price, type: Integer
           field :pi, as: :period_interval, type: Integer, default: 1   # period in months
           field :pu, as: :period_unit, type: String, default: 'month'   # period in months
+          field :av, as: :available, type: Boolean, default: true
 
           mongoid_timestamps!
 

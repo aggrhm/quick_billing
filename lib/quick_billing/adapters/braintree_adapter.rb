@@ -1,8 +1,8 @@
 module QuickBilling
 
-  module Platforms
+  module Adapters
 
-    module Braintree
+    module BraintreeAdapter
       ## CUSTOMERS
 
       def self.create_customer(opts)
@@ -26,12 +26,27 @@ module QuickBilling
           pm = PaymentMethod.from_braintree_credit_card(result.credit_card)
           return {success: true, id: result.credit_card.token, data: pm, orig: result}
         else
-          return {success: false, orig: result}
+          return {success: false, error: result.message, orig: result}
         end
       end
 
-      def self.list_customer_payment_methods(customer_id, opts)
+      def self.delete_credit_card(opts)
+        begin
+          result = Braintree::CreditCard.delete(opts[:token])
+          if result == true || result.success?
+            pm = PaymentMethod.new(token: opts[:token])
+            return {success: true, id: pm.token, data: pm, orig: result}
+          else
+            return {success: false, error: 'Credit card could not be found.', orig: result}
+          end
+        rescue Exception => e
+            return {success: false, error: 'Credit card could not be found.', orig: result}
+        end
+      end
+
+      def self.list_payment_methods(customer_id, opts={})
         cust = self.find_customer(customer_id)
+        return {success: false, error: "Customer not found"} if cust.nil?
         data = cust.credit_cards.collect {|card|
           PaymentMethod.from_braintree_credit_card(card)
         }
@@ -55,7 +70,7 @@ module QuickBilling
         if result.success?
           return {success: true, id: tr.id, status: tr.status, orig: result}
         else
-          return {success: false, error: tr.status, orig: result}
+          return {success: false, error: result.message, orig: result}
         end
       end
 

@@ -69,7 +69,7 @@ module QuickBilling
     end
 
     def active_subscriptions
-      Subscription.for_account(self.id).active.first
+      QuickBilling.models[:subscription].for_account(self.id).active
     end
 
     # ACCESSORS
@@ -85,7 +85,7 @@ module QuickBilling
     # ACTIONS
 
     def ensure_customer_id!
-      return unless self.customer_id.nil?
+      return self.customer_id unless self.customer_id.blank?
       result = QuickBilling.platform.create_customer({id: self.id.to_s, email: self.user.email})
       if result[:success]
         self.customer_id = result[:id]
@@ -94,25 +94,28 @@ module QuickBilling
       else
         raise "Could not create customer!"
       end
+      return self.customer_id
     end
 
     def save_credit_card(opts)
-      self.ensure_customer_id!
       result = QuickBilling.platform.save_credit_card(
         token: opts[:token],
-        customer_id: self.customer_id,
+        customer_id: self.ensure_customer_id!,
         number: opts[:number].to_s,
         expiration_date: opts[:expiration_date]
       )
-      if result[:success]
-        self.update_customer_accounts
-      end
+      self.update_payment_methods
       return result
     end
 
-    def update_customer_accounts
-      self.ensure_customer_id!
-      result = QuickBilling.platform.list_customer_accounts(self.customer_id)
+    def delete_credit_card(opts)
+      result = QuickBilling.platform.delete_credit_card(token: opts[:token])
+      self.update_payment_methods
+      return result
+    end
+
+    def update_payment_methods
+      result = QuickBilling.platform.list_payment_methods(self.ensure_customer_id!)
       if result[:success]
         self.payment_methods = result[:data].collect(&:to_api)
         self.save
@@ -125,9 +128,9 @@ module QuickBilling
 
       new_bal = 0
       Transaction.for_accountable(self.id).each do |tr|
-        if tr.state? :charge || tr.state? :refund
+        if tr.state?(:charge) || tr.state?(:refund)
           new_bal -= tr.amount
-        elsif tr.state? :payment || tr.state? :credit
+        elsif tr.state?(:payment) || tr.state?(:credit)
           new_bal += tr.amount
         end
       end
@@ -150,7 +153,7 @@ module QuickBilling
       plan_key = opts[:plan_key]
       as = self.active_subscription
       as.cancel! unless as.nil?
-      sub = Subscription.subscribe_to_plan(user, plan_key)
+      sub = QuickBilling.models[:subscription].subscribe_to_plan(user, plan_key)
     end
 
     def enter_payment!(amt = nil)
