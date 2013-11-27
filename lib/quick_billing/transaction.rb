@@ -3,7 +3,7 @@ module QuickBilling
   module Transaction
 
     TYPES = {charge: 1, payment: 2, credit: 3, refund: 4}
-    STATES = {entered: 1, processing: 2, completed: 3, void: 4}
+    STATES = {entered: 1, processing: 2, completed: 3, void: 4, error: 5}
 
     def self.included(base)
       base.extend ClassMethods
@@ -32,7 +32,7 @@ module QuickBilling
           mongoid_timestamps!
 
           scope :for_account, lambda {|acct_id|
-            where(aid: acct_id)
+            where(aid: acct_id).desc(:created_at)
           }
 
           scope :completed, lambda {
@@ -44,19 +44,22 @@ module QuickBilling
       def enter_charge_for_subscription!(sub)
         t = self.new
         t.type! :charge
-        t.description = sub.plan.name
+        t.description = "Subscription: #{sub.plan.name}"
         t.amount = sub.amount
         t.state! :completed
         t.account = sub.account
         t.subscription = sub
-        if t.save
-          return {success: true, data: t}
-        else
-          return {success: false, data: t}
+        success = t.save
+        if success
+          t.account.modify_balance! t.amount
+          Job.run_later :billing, t, :handle_completed
         end
+        return {success: success, data: t}
       end
 
       def enter_payment!(acct, amt, opts={})
+        return {success: false, error: "Cannot charge zero amount."} if amt == 0
+
         success = false
         t = self.new
         t.type! :payment
@@ -73,38 +76,114 @@ module QuickBilling
         return {success: success, data: t}
       end
 
+      def enter_credit!(acct, amt, opts={})
+        success = false
+        t = self.new
+        t.type! :credit
+        t.description = opts[:description] || "Credit"
+        t.amount = amt
+        t.state! :completed
+        t.account = acct
+        if t.save
+          success = true
+          acct.modify_balance! -amt
+          Job.run_later :billing, t, :handle_completed
+        end
+
+        return {success: success, data: t}
+      end
+
+      def enter_manual_refund!(acct, amt, opts={})
+        success = false
+        t = self.new
+        t.type! :refund
+        t.description = opts[:description] || "Manual Refund"
+        t.amount = amt
+        t.state! :completed
+        t.account = acct
+        if t.save
+          success = true
+          acct.modify_balance! amt
+          Job.run_later :billing, t, :handle_completed
+        end
+
+        return {success: success, data: t}
+      end
+
+      def void!(tr_id)
+        t = self.find(tr_id)
+        return {success: false, error: 'Transaction not found'} if t.nil?
+        t.void!
+        return {success: true, data: t}
+      end
+
     end
 
     ## INSTANCE METHODS
 
     # ACCESSORS
 
+    def type_str
+      TYPES.invert[self.type].to_s
+    end
+
+    def amount_usd_str
+      "$ #{'%.2f' % self.amount_usd}"
+    end
+
+    def amount_usd
+      self.amount / 100.0
+    end
 
     # ACTIONS
 
+    def void!
+      self.state! :void
+      self.save
+      Job.run_later :billing, self, :handle_voided
+      return true
+    end
+
     def process_payment!
-      acct = t.account
+      acct = self.account
       result = QuickBilling.platform.send_payment(
-        amount: t.amount,
-        customer_id: acct.billing_info['customer_id']
+        amount: self.amount,
+        customer_id: acct.customer_id
       )
 
-      t.meta['platform'] = QuickBilling.options[:platform]
+      self.meta['platform'] = QuickBilling.options[:platform]
       if result[:success]
-        t.state! :completed
-        t.meta['transaction_id'] = result[:id]
-        t.save
+        self.state! :completed
+        self.meta['transaction_id'] = result[:id]
+        self.save
+        self.account.modify_balance! -self.amount
+        Job.run_later :billing, self, :handle_completed
         return true
       else
-        t.state! :void
-        t.meta['transaction_id'] = result[:id]
-        t.error_message = result[:error]
-        t.save
+        self.state! :error
+        self.meta['transaction_id'] = result[:id]
+        self.error_message = result[:error]
+        self.save
+        Job.run_later :billing, self, :handle_error
         return false
       end
     end
 
-    def to_api(opt)
+    # HANDLERS
+
+    def handle_completed
+      Job.run_later :meta, self.account, :update_balance
+    end
+
+    def handle_error
+
+    end
+
+    def handle_voided
+      Job.run_later :meta, self.account, :update_balance
+    end
+
+    def to_api(opt=:full)
       ret = {}
 
       ret[:id] = self.id.to_s

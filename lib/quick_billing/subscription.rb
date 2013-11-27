@@ -2,7 +2,7 @@ module QuickBilling
 
   module Subscription
 
-    STATES = {inactive: 1, active: 2, canceled: 3}
+    STATES = {inactive: 1, active: 2, cancelled: 3}
 
     def self.included(base)
       base.extend ClassMethods
@@ -42,15 +42,13 @@ module QuickBilling
       end
 
       def subscribe_to_plan(account, plan_key)
-        plan_key = opts[:plan_key]
-
         # find plan with plan key
-        plan = BillingPlan.with_key(plan_key).first
+        plan = QuickBilling.models[:billing_plan].with_key(plan_key)
 
-        raise "No plan with key" if plan.nil?
+        return {success: false, error: "No plan with key"} if plan.nil?
 
         # create subscription
-        sub = Subscription.new
+        sub = self.new
         sub.account = account
         sub.plan_key = plan.key
         sub.amount = plan.price
@@ -58,17 +56,17 @@ module QuickBilling
         sub.save
 
         # enter charge
-        sub.enter_charge!
+        result = sub.enter_charge!
+        return {success: false, data: sub, error: 'Could not activate subscription.'} if result[:success] == false
 
-        return sub
+        Job.run_later :billing, sub, :handle_activated
+        return {success: true, data: sub}
       end
 
       def process_expired_subscriptions(opts={})
         self.active.expired.each do |sub|
-          QuickUtils.unit_of_work do
-            Rails.logger.info "#{Time.now.to_s}: Entering charge for subscription #{sub}."
-            sub.enter_charge!
-          end
+          Rails.logger.info "#{Time.now.to_s} : Adding job for expired subscription."
+          Job.run_later :billing, sub, :enter_charge!
         end
       end
 
@@ -79,42 +77,68 @@ module QuickBilling
     # ACCESSORS
 
     def plan
-      BillingPlan.with_key(self.plan_key)
+      QuickBilling.models[:billing_plan].with_key(self.plan_key)
     end
 
     # TRANSACTIONS
 
     def enter_charge!
-      result = Transaction.enter_charge_for_subscription!(sub)
+      result = QuickBilling.models[:transaction].enter_charge_for_subscription!(self)
       if result[:success]
+        per_start = self.expires_at || Time.now
         t = result[:data]
-        self.expires_at = Time.now + self.plan.period
+        self.expires_at = per_start + self.plan.period
         self.last_charged_at = Time.now
         self.last_charged_amount = t.amount
         self.state! :active
         self.save
         # update account balance
-        Job.run_later :meta, self.account, :update_account_balance
-        return true
+        Job.run_later :billing, self, :handle_charged
+        return {success: true}
       else
-        return false
+        return {success: false}
       end
-
     end
 
     def cancel!
+      exp = self.expires_at
+
+      # issue credit
+      if self.state?(:active) && exp > Time.now && self.last_charged_amount > 0
+        time_rem = exp - Time.now
+        time_rem_f = time_rem / self.plan.period
+        credit_due = (time_rem_f * self.last_charged_amount).to_i
+        result = QuickBilling.models[:transaction].enter_credit!(self.account, credit_due, {description: 'Subscription cancellation credit'})
+        return {success: false, error: 'Could not issue credit for cancellation.'} if result[:success] == false
+      end
+
+      # cancel subscription
       self.expires_at = Time.now
-      self.state! :canceled
+      self.state! :cancelled
       self.save
-      Job.run_later :meta, self.account, :update_account_balance
+
+      # update balance
+      Job.run_later :billing, self, :handle_cancelled
+      return {success: true}
+    end
+
+    def handle_activated
+
+    end
+
+    def handle_charged
+    end
+
+    def handle_cancelled
     end
 
     # API
 
-    def to_api
+    def to_api(opt=:full)
       ret = {}
       ret[:id] = self.id.to_s
       ret[:plan_key] = self.plan_key
+      ret[:plan] = self.plan.to_api
       ret[:expires_at] = self.expires_at.to_i
       ret[:state] = self.state
       return ret

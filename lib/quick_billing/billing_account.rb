@@ -32,12 +32,15 @@ module QuickBilling
 
           belongs_to :user, :foreign_key => :uid, :class_name => 'User'
 
-          scope :with_negative_balance, lambda {
-            where('bl' => {'$lt' => 0})
+          scope :with_debt, lambda {
+            where('bl' => {'$gt' => 0})
+          }
+          scope :with_payable_debt, lambda {
+            where('bl' => {'$gt' => 200})
           }
 
           scope :payment_attempt_ready, lambda {
-            where('pa_at' => {'$lt' => 1.day.ago})
+            where('$or' => [{'pa_at' => {'$lt' => 1.day.ago}}, {'pa_at' => nil}])
           }
 
           scope :with_overdue_balance, lambda {
@@ -51,11 +54,9 @@ module QuickBilling
       end
 
       def process_unbilled_accounts
-        self.with_negative_balance.payment_attempt_ready.each do |acct|
-          QuickUtils.unit_of_work do
-            Rails.logger.info "#{Time.now.to_s}: Entering payment for accountable #{acct}."
-            acct.enter_payment!
-          end
+        self.with_payable_debt.payment_attempt_ready.each do |acct|
+          Rails.logger.info "#{Time.now.to_s} : Adding job for unbilled payable account."
+          Job.run_later :billing, acct, :enter_payment!
         end
       end
 
@@ -122,16 +123,16 @@ module QuickBilling
       end
     end
 
-    def update_account_balance
+    def update_balance
       # iterate all transactions
-      old_bal = self.account_balance
+      old_bal = self.balance
 
       new_bal = 0
-      Transaction.for_accountable(self.id).each do |tr|
-        if tr.state?(:charge) || tr.state?(:refund)
-          new_bal -= tr.amount
-        elsif tr.state?(:payment) || tr.state?(:credit)
+      QuickBilling.models[:transaction].completed.for_account(self.id).each do |tr|
+        if tr.type?(:charge) || tr.type?(:refund)
           new_bal += tr.amount
+        elsif tr.type?(:payment) || tr.type?(:credit)
+          new_bal -= tr.amount
         end
       end
 
@@ -147,33 +148,50 @@ module QuickBilling
       self.balance = new_bal
 
       self.save
+      return self.balance
     end
 
-    def subscribe_to_single_plan(opts)
+    def modify_balance!(amt)
+      self.inc(:bl, amt)
+    end
+
+    def subscribe_to_single_plan!(opts)
       plan_key = opts[:plan_key]
       as = self.active_subscription
       as.cancel! unless as.nil?
-      sub = QuickBilling.models[:subscription].subscribe_to_plan(user, plan_key)
+      sub = QuickBilling.models[:subscription].subscribe_to_plan(self, plan_key)
     end
 
     def enter_payment!(amt = nil)
-      amt ||= self.account_balance
-      amt = amt.abs
-
-      result = Transaction.enter_payment!(self, amt)
-      if result[:success]
-        Job.run_later :meta, self, :update_account_balance
-      end
       self.last_payment_attempted_at = Time.now
       self.save
+
+      amt ||= self.update_balance   # ensure balance up to date
+
+      return {success: false, error: 'Payment amount must be greater than $2.'} if amt <= 200
+      result = QuickBilling.models[:transaction].enter_payment!(self, amt)
+      Job.run_later :billing, self, :handle_payment_attempted
+      return {success: true}
     end
 
-    def to_api
+    def handle_payment_attempted
+    end
+
+    def update_platform_info
+      return if self.customer_id.nil?
+      cust = QuickBilling.platform.find_customer(self.customer_id)
+      if cust.nil?
+        self.customer_id = nil
+      end
+      self.update_payment_methods
+    end
+
+    def to_api(opt=:full)
       ret = {}
       ret[:id] = self.id
       ret[:balance] = self.balance
       ret[:payment_methods] = self.payment_methods
-      ret[:subscriptions] = self.active_subscriptions.collect(&:to_api)
+      ret[:active_subscriptions] = self.active_subscriptions.collect(&:to_api)
       return ret
     end
 

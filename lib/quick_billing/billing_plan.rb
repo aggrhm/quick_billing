@@ -21,6 +21,9 @@ module QuickBilling
 
           mongoid_timestamps!
 
+          scope :available, lambda {
+            where(av: true)
+          }
         end
       end
 
@@ -42,10 +45,17 @@ module QuickBilling
     ## INSTANCE METHODS
 
     def period
-      return self.period_interval.months
+      case self.period_unit
+      when 'month'
+        return self.period_interval.months
+      when 'year'
+        return self.period_interval.years
+      else
+        raise 'Period cannot be determined'
+      end
     end
 
-    def to_api(opt)
+    def to_api(opt=:full)
       ret = {}
       ret[:id] = self.id.to_s
       ret[:name] = self.name
