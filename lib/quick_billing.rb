@@ -1,5 +1,6 @@
 require "quick_billing/version"
 require "quick_billing/billing_account"
+require "quick_billing/payment"
 require "quick_billing/billing_plan"
 require "quick_billing/transaction"
 require "quick_billing/subscription"
@@ -46,6 +47,7 @@ module QuickBilling
     @options[:classes][:billing_plan] ||= ::BillingPlan
     @options[:classes][:transaction] ||= ::Transaction
     @options[:classes][:billing_account] ||= ::BillingAccount
+    @options[:classes][:payment] ||= ::Payment
   end
 
   def self.setup_braintree
@@ -70,14 +72,30 @@ module QuickBilling
     self.options[:classes]
   end
 
+  ## HELPERS
+
+  class Helpers
+
+    def self.amount_usd_str(amt)
+      "$ #{'%.2f' % self.amount_usd(amt)}"
+    end
+
+    def self.amount_usd(amt)
+      amt / 100.0
+    end
+
+  end
+
   ## CLASSES
 
   class PaymentMethod
 
-    attr_accessor :type, :token, :number, :expiration_date, :card_type
+    attr_accessor :platform, :customer_id, :type, :token, :number, :expiration_date, :card_type
 
     def self.from_braintree_credit_card(card)
       pm = PaymentMethod.new(
+        platform: :braintree,
+        customer_id: card.customer_id,
         type: QuickBilling::ACCOUNT_TYPES[:credit_card],
         token: card.token,
         number: card.masked_number,
@@ -96,6 +114,8 @@ module QuickBilling
 
     def to_api
       {
+        platform: self.platform,
+        customer_id: self.customer_id,
         type: self.type,
         token: self.token,
         number: self.number,

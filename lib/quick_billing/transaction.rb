@@ -21,10 +21,11 @@ module QuickBilling
           field :st, as: :state, type: Integer
           field :st_at, as: :state_changed_at, type: Time
           field :mth, as: :meta, type: Hash, default: Hash.new
-          field :er, as: :error_message, type: String
+          field :sa, as: :status, type: String
 
           belongs_to :subscription, :foreign_key => :sid, :class_name => 'Subscription'
           belongs_to :account, :foreign_key => :aid, :class_name => 'BillingAccount'
+          belongs_to :payment, :foreign_key => :pid, :class_name => 'Payment'
 
           enum_methods! :type, TYPES
           enum_methods! :state, STATES
@@ -37,6 +38,10 @@ module QuickBilling
 
           scope :completed, lambda {
             where(st: STATES[:completed])
+          }
+
+          scope :for_payment, lambda {|pid|
+            where(pid: pid)
           }
         end
       end
@@ -57,20 +62,23 @@ module QuickBilling
         return {success: success, data: t}
       end
 
-      def enter_payment!(acct, amt, opts={})
-        return {success: false, error: "Cannot charge zero amount."} if amt == 0
+      def enter_completed_payment!(acct, payment, opts={})
+        if !self.for_payment(payment.id).first.nil?
+          return {success: false, error: "Transaction already completed for payment"}
+        end
 
         success = false
         t = self.new
         t.type! :payment
         t.description = "Payment"
-        t.amount = amt
-        t.state! :entered
+        t.payment = payment
+        t.amount = payment.amount
+        t.state! :completed
         t.account = acct
-        if t.save
-          if t.process_payment!
-            success = true
-          end
+        success = t.save
+        if success
+          t.account.modify_balance! -t.amount
+          Job.run_later :billing, t, :handle_completed
         end
 
         return {success: success, data: t}
@@ -127,14 +135,6 @@ module QuickBilling
       TYPES.invert[self.type].to_s
     end
 
-    def amount_usd_str
-      "$ #{'%.2f' % self.amount_usd}"
-    end
-
-    def amount_usd
-      self.amount / 100.0
-    end
-
     # ACTIONS
 
     def void!
@@ -142,31 +142,6 @@ module QuickBilling
       self.save
       Job.run_later :billing, self, :handle_voided
       return true
-    end
-
-    def process_payment!
-      acct = self.account
-      result = QuickBilling.platform.send_payment(
-        amount: self.amount,
-        customer_id: acct.customer_id
-      )
-
-      self.meta['platform'] = QuickBilling.options[:platform]
-      if result[:success]
-        self.state! :completed
-        self.meta['transaction_id'] = result[:id]
-        self.save
-        self.account.modify_balance! -self.amount
-        Job.run_later :billing, self, :handle_completed
-        return true
-      else
-        self.state! :error
-        self.meta['transaction_id'] = result[:id]
-        self.error_message = result[:error]
-        self.save
-        Job.run_later :billing, self, :handle_error
-        return false
-      end
     end
 
     # HANDLERS

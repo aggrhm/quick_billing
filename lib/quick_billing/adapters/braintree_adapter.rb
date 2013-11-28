@@ -60,7 +60,7 @@ module QuickBilling
       def self.send_payment(opts)
         result = Braintree::Transaction.sale(
           amount: (opts[:amount] / 100.0).to_s,
-          customer_id: opts[:customer_id],
+          payment_method_token: opts[:payment_method]['token'],
           recurring: true,
           options: {
             submit_for_settlement: true

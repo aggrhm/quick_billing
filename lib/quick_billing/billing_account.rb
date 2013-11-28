@@ -169,12 +169,17 @@ module QuickBilling
       amt ||= self.update_balance   # ensure balance up to date
 
       return {success: false, error: 'Payment amount must be greater than $2.'} if amt <= 200
-      result = QuickBilling.models[:transaction].enter_payment!(self, amt)
-      Job.run_later :billing, self, :handle_payment_attempted
-      return {success: true}
+      result = QuickBilling.models[:payment].send_payment!(self, self.payment_methods[0], amt)
+      return result
     end
 
-    def handle_payment_attempted
+    def handle_payment_attempted(payment_id)
+    end
+
+    def handle_payment_completed(payment_id)
+      # enter transaction for this account
+      payment = QuickBilling.models[:payment].find(payment_id)
+      QuickBilling.models[:transaction].enter_completed_payment!(self, payment)
     end
 
     def update_platform_info
@@ -185,6 +190,15 @@ module QuickBilling
       end
       self.update_payment_methods
     end
+
+    def ensure_payment_transactions
+      QuickBilling.models[:payment].for_accountable(self.id).each do |payment|
+        if  QuickBilling.models[:transaction].for_payment(payment.id).count == 0
+          self.handle_payment_completed(payment.id)
+        end
+      end
+    end
+
 
     def to_api(opt=:full)
       ret = {}

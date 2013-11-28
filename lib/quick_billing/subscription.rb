@@ -24,6 +24,8 @@ module QuickBilling
 
           belongs_to :account, :foreign_key => :aid, :class_name => 'BillingAccount'
 
+          mongoid_timestamps!
+
           enum_methods! :state, STATES
 
           scope :active, lambda {
