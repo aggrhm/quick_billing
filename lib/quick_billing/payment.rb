@@ -37,25 +37,46 @@ module QuickBilling
           where(:st => {'$in' => [STATES[:entered], STATES[:processing]]})
         }
 
+        scope :with_error, lambda {
+          where(:st => STATE[:error])
+        }
+
       end
 
       def send_payment!(accountable, payment_method, amt, opts={})
         return {success: false, error: "Cannot charge non-positive amount."} if amt < 0
 
-        success = false
-        p = self.new
-        p.state! :entered
-        p.amount = amt
-        p.accountable = accountable
-        p.payment_method = payment_method
-        if p.save
-          if p.process_payment!
-            success = true
+        begin
+          success = false
+          p = self.new
+          p.state! :entered
+          p.amount = amt
+          p.accountable = accountable
+          p.payment_method = payment_method
+          if p.save
+            if p.process_payment!
+              # notify accountable
+              result = p.accountable.handle_payment_completed(p)
+              if result[:success]
+                success = true
+              else
+                success = false
+                p.state! :error
+                p.status = result[:error]
+                p.save
+              end
+            end
           end
-        end
 
-        Job.run_later :billing, accountable, :handle_payment_attempted, [p.id]
-        return {success: success, data: p, error: p.status}
+          Job.run_later :billing, accountable, :handle_payment_attempted, [p.id]
+          return {success: success, data: p, error: p.status}
+        rescue Exception => e
+          p.state! :error
+          p.status = e.message
+          p.status << "\n" + e.backtrace.join("\n\t")
+          p.save
+          return {success: false, data: p, error: "An error occurred processing this payment. Please do not re-attempt, an admin will contact you."}
+        end
       end
 
     end
@@ -99,8 +120,6 @@ module QuickBilling
     end
 
     def handle_completed
-      # notify accountable
-      Job.run_later :billing, self.accountable, :handle_payment_completed, [self.id]
 
     end
 

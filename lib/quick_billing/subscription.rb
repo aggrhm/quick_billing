@@ -48,6 +48,7 @@ module QuickBilling
         plan = QuickBilling.models[:billing_plan].with_key(plan_key)
 
         return {success: false, error: "No plan with key"} if plan.nil?
+        return {success: false, error: "Plan is no longer available"} if !plan.is_available?
 
         # create subscription
         sub = self.new
@@ -108,9 +109,9 @@ module QuickBilling
       # issue credit
       if self.state?(:active) && exp > Time.now && self.last_charged_amount > 0
         time_rem = exp - Time.now
-        time_rem_f = time_rem / self.plan.period
+        time_rem_f = time_rem / (exp - self.last_charged_at)
         credit_due = (time_rem_f * self.last_charged_amount).to_i
-        result = QuickBilling.models[:transaction].enter_credit!(self.account, credit_due, {description: 'Subscription cancellation credit'})
+        result = QuickBilling.models[:transaction].enter_credit!(self.account, credit_due, {description: 'Subscription cancellation credit', subscription: self})
         return {success: false, error: 'Could not issue credit for cancellation.'} if result[:success] == false
       end
 
@@ -141,6 +142,7 @@ module QuickBilling
       ret[:id] = self.id.to_s
       ret[:plan_key] = self.plan_key
       ret[:plan] = self.plan.to_api
+      ret[:amount] = self.amount
       ret[:expires_at] = self.expires_at.to_i
       ret[:state] = self.state
       return ret

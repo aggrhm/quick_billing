@@ -17,12 +17,16 @@ module QuickBilling
           field :pr, as: :price, type: Integer
           field :pi, as: :period_interval, type: Integer, default: 1   # period in months
           field :pu, as: :period_unit, type: String, default: 'month'   # period in months
-          field :av, as: :available, type: Boolean, default: true
+          field :av, as: :is_available, type: Boolean, default: true
+          field :pb, as: :is_public, type: Boolean, default: true
 
           mongoid_timestamps!
 
           scope :available, lambda {
             where(av: true)
+          }
+          scope :public, lambda {
+            where(pb: true)
           }
         end
       end

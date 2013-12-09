@@ -90,6 +90,7 @@ module QuickBilling
         t.type! :credit
         t.description = opts[:description] || "Credit"
         t.amount = amt
+        t.subscription = opts[:subscription] if opts[:subscription]
         t.state! :completed
         t.account = acct
         if t.save

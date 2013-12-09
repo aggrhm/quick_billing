@@ -30,8 +30,6 @@ module QuickBilling
           field :pa_at, as: :last_payment_attempted_at, type: Time
           field :mth, as: :meta, type: Hash, default: Hash.new
 
-          belongs_to :user, :foreign_key => :uid, :class_name => 'User'
-
           scope :with_debt, lambda {
             where('bl' => {'$gt' => 0})
           }
@@ -47,9 +45,6 @@ module QuickBilling
             where('bo_at' => {'$lt' => Time.now})
           }
 
-          scope :owned_by, lambda {|uid|
-            where(uid: uid)
-          }
         end
       end
 
@@ -76,18 +71,28 @@ module QuickBilling
     # ACCESSORS
 
     def state
-      if self.balance < 0 && self.balance_overdue_at < Time.now
+      if self.balance > 0 && self.balance_overdue_at < Time.now
         return STATES[:delinquent]
       else
         return STATES[:paid]
       end
     end
 
+    def is_paid?
+      return self.state == STATES[:paid]
+    end
+
+    def admin_users
+      # override this method with users authorized for this account
+
+    end
+
     # ACTIONS
 
     def ensure_customer_id!
       return self.customer_id unless self.customer_id.blank?
-      result = QuickBilling.platform.create_customer({id: self.id.to_s, email: self.user.email})
+      admin = self.admin_users.first
+      result = QuickBilling.platform.create_customer({id: self.id.to_s, email: admin.email})
       if result[:success]
         self.customer_id = result[:id]
         self.platform = QuickBilling.options[:platform]
@@ -176,10 +181,10 @@ module QuickBilling
     def handle_payment_attempted(payment_id)
     end
 
-    def handle_payment_completed(payment_id)
+    def handle_payment_completed(payment)
       # enter transaction for this account
-      payment = QuickBilling.models[:payment].find(payment_id)
-      QuickBilling.models[:transaction].enter_completed_payment!(self, payment)
+      result = QuickBilling.models[:transaction].enter_completed_payment!(self, payment)
+      return result
     end
 
     def update_platform_info
