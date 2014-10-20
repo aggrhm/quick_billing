@@ -10,7 +10,7 @@ module QuickBilling
 	#   balance_overdue_at : <date balance is overdue, account is delinquent> 
   # }
 
-  module BillingAccount
+  module Account
 
     STATES = {paid: 1, delinquent: 2}
 
@@ -22,8 +22,9 @@ module QuickBilling
 
       def quick_billing_account_keys_for(db)
         if db == :mongoid
+          include MongoHelper::Model
           field :cid, as: :customer_id, type: String
-          field :pms, as: :payment_methods, type: Array, default: []
+          field :pms, type: Array, default: []
           field :pf, as: :platform, type: String
           field :bl, as: :balance, type: Integer, default: 0
           field :bo_at, as: :balance_overdue_at, type: Time
@@ -36,14 +37,28 @@ module QuickBilling
           scope :with_payable_debt, lambda {
             where('bl' => {'$gt' => 200})
           }
-
           scope :payment_attempt_ready, lambda {
             where('$or' => [{'pa_at' => {'$lt' => 1.day.ago}}, {'pa_at' => nil}])
           }
-
           scope :with_overdue_balance, lambda {
             where('bo_at' => {'$lt' => Time.now})
           }
+
+          define_method :payment_methods do
+            self.pms.collect{|pm| QuickBilling::PaymentMethod.new(pm)}
+          end
+
+          define_method :payment_methods= do |val|
+            self.pms = val.collect{|pm|
+              if pm.is_a? QuickBilling::PaymentMethod
+                pm.to_hash
+              elsif pm.is_a? Hash
+                pm
+              else
+                raise "Cannot parse #{pm.class.to_s} to mongo PaymentMethod"
+              end
+            }
+          end
 
         end
       end
@@ -65,7 +80,7 @@ module QuickBilling
     end
 
     def active_subscriptions
-      QuickBilling.models[:subscription].for_account(self.id).active
+      QuickBilling.Subscription.for_account(self.id).active
     end
 
     # ACCESSORS
@@ -87,6 +102,14 @@ module QuickBilling
 
     end
 
+    def has_valid_payment_method?
+      self.payment_methods.length > 0
+    end
+
+    def credit_cards
+      self.payment_methods.select{|pm| pm.type?(:credit_card) }
+    end
+
     # ACTIONS
 
     def ensure_customer_id!
@@ -103,19 +126,15 @@ module QuickBilling
       return self.customer_id
     end
 
-    def save_credit_card(opts)
-      result = QuickBilling.platform.save_credit_card(
-        token: opts[:token],
-        customer_id: self.ensure_customer_id!,
-        number: opts[:number].to_s,
-        expiration_date: opts[:expiration_date]
-      )
+    def save_payment_method(opts)
+      opts[:customer_id] = self.ensure_customer_id!
+      result = QuickBilling.platform.save_payment_method(opts)
       self.update_payment_methods
       return result
     end
 
-    def delete_credit_card(opts)
-      result = QuickBilling.platform.delete_credit_card(token: opts[:token])
+    def delete_payment_method(opts)
+      result = QuickBilling.platform.delete_payment_method(token: opts[:token])
       self.update_payment_methods
       return result
     end
@@ -123,7 +142,7 @@ module QuickBilling
     def update_payment_methods
       result = QuickBilling.platform.list_payment_methods(self.ensure_customer_id!)
       if result[:success]
-        self.payment_methods = result[:data].collect(&:to_api)
+        self.payment_methods = result[:data]
         self.save
       end
     end
@@ -133,7 +152,7 @@ module QuickBilling
       old_bal = self.balance
 
       new_bal = 0
-      QuickBilling.models[:transaction].completed.for_account(self.id).each do |tr|
+      QuickBilling.Transaction.completed.for_account(self.id).each do |tr|
         if tr.type?(:charge) || tr.type?(:refund)
           new_bal += tr.amount
         elsif tr.type?(:payment) || tr.type?(:credit)
@@ -160,13 +179,6 @@ module QuickBilling
       self.inc(:bl, amt)
     end
 
-    def subscribe_to_single_plan!(opts)
-      plan_key = opts[:plan_key]
-      as = self.active_subscription
-      as.cancel! unless as.nil?
-      sub = QuickBilling.models[:subscription].subscribe_to_plan(self, plan_key)
-    end
-
     def enter_payment!(amt = nil)
       self.last_payment_attempted_at = Time.now
       self.save
@@ -174,16 +186,7 @@ module QuickBilling
       amt ||= self.update_balance   # ensure balance up to date
 
       return {success: false, error: 'Payment amount must be greater than $2.'} if amt <= 200
-      result = QuickBilling.models[:payment].send_payment!(self, self.payment_methods[0], amt)
-      return result
-    end
-
-    def handle_payment_attempted(payment_id)
-    end
-
-    def handle_payment_completed(payment)
-      # enter transaction for this account
-      result = QuickBilling.models[:transaction].enter_completed_payment!(self, payment)
+      result = QuickBilling.Payment.send_payment!({account: self, payment_method: self.payment_methods[0], amount: amt})
       return result
     end
 
@@ -197,9 +200,9 @@ module QuickBilling
     end
 
     def ensure_payment_transactions
-      QuickBilling.models[:payment].for_accountable(self.id).each do |payment|
-        if  QuickBilling.models[:transaction].for_payment(payment.id).count == 0
-          self.handle_payment_completed(payment.id)
+      QuickBilling.Payment.for_account(self.id).each do |payment|
+        if QuickBilling.Transaction.for_payment(payment.id).count == 0
+          QuickBilling.Transaction.enter_completed_payment!(payment)
         end
       end
     end
@@ -209,7 +212,7 @@ module QuickBilling
       ret = {}
       ret[:id] = self.id
       ret[:balance] = self.balance
-      ret[:payment_methods] = self.payment_methods
+      ret[:payment_methods] = self.payment_methods.collect(&:to_api)
       ret[:active_subscriptions] = self.active_subscriptions.collect(&:to_api)
       return ret
     end

@@ -20,6 +20,12 @@ Or install it yourself as:
 
 TODO: Write usage instructions here
 
+## Later Features
+
+* Order model for handling purchase orders. Invoice tied to order.
+* Allow Payments directly on Invoice, rather than just billing account (for one-time orders)
+* Prorating adjustments for Subscriptions
+
 ## Contributing
 
 1. Fork it

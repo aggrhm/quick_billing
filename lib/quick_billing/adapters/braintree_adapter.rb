@@ -16,23 +16,28 @@ module QuickBilling
 
       ## ACCOUNTS
 
-      def self.save_credit_card(opts)
-        if opts[:token].blank?
-          result = Braintree::CreditCard.create(opts.slice(:customer_id, :number, :expiration_date, :cvv))
+      def self.save_payment_method(opts)
+        req = {
+          token: opts[:token], 
+          customer_id: opts[:customer_id],
+          payment_method_nonce: opts[:payment_method_nonce]
+        }
+        if req[:token].blank?
+          result = Braintree::PaymentMethod.create(req)
         else
-          result = Braintree::CreditCard.update(opts.slice(:token, :customer_id, :number, :expiration_date, :cvv))
+          result = Braintree::PaymentMethod.update(req[:token], req)
         end
         if result.success?
-          pm = PaymentMethod.from_braintree_credit_card(result.credit_card)
-          return {success: true, id: result.credit_card.token, data: pm, orig: result}
+          pm = PaymentMethod.from_braintree_credit_card(result.payment_method)
+          return {success: true, id: result.payment_method.token, data: pm, orig: result}
         else
           return {success: false, error: result.message, orig: result}
         end
       end
 
-      def self.delete_credit_card(opts)
+      def self.delete_payment_method(opts)
         begin
-          result = Braintree::CreditCard.delete(opts[:token])
+          result = Braintree::PaymentMethod.delete(opts[:token])
           if result == true || result.success?
             pm = PaymentMethod.new(token: opts[:token])
             return {success: true, id: pm.token, data: pm, orig: result}
@@ -60,7 +65,7 @@ module QuickBilling
       def self.send_payment(opts)
         result = Braintree::Transaction.sale(
           amount: (opts[:amount] / 100.0).to_s,
-          payment_method_token: opts[:payment_method]['token'],
+          payment_method_token: opts[:payment_method].token,
           recurring: true,
           options: {
             submit_for_settlement: true

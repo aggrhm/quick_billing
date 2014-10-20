@@ -23,9 +23,10 @@ module QuickBilling
           field :mth, as: :meta, type: Hash, default: Hash.new
           field :sa, as: :status, type: String
 
-          belongs_to :subscription, :foreign_key => :sid, :class_name => 'Subscription'
-          belongs_to :account, :foreign_key => :aid, :class_name => 'BillingAccount'
-          belongs_to :payment, :foreign_key => :pid, :class_name => 'Payment'
+          belongs_to :subscription, :foreign_key => :sid, :class_name => QuickBilling.Subscription.to_s
+          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.Account.to_s
+          belongs_to :payment, :foreign_key => :pid, :class_name => QuickBilling.Payment.to_s
+          belongs_to :invoice, :foreign_key => :iid, :class_name => QuickBilling.Invoice.to_s
 
           enum_methods! :type, TYPES
           enum_methods! :state, STATES
@@ -46,23 +47,23 @@ module QuickBilling
         end
       end
 
-      def enter_charge_for_subscription!(sub)
+      def enter_charge!(acct, amt, opts)
         t = self.new
         t.type! :charge
-        t.description = "Subscription: #{sub.plan.name}"
-        t.amount = sub.amount
-        t.state! :completed
-        t.account = sub.account
-        t.subscription = sub
+        t.description = opts[:description]
+        t.amount = amt
+        t.state!(opts[:state] || :completed)
+        t.account = acct
+        t.subscription = opts[:subscription]
         success = t.save
         if success
-          t.account.modify_balance! t.amount
+          t.account.modify_balance! amt
           Job.run_later :billing, t, :handle_completed
         end
         return {success: success, data: t}
       end
 
-      def enter_completed_payment!(acct, payment, opts={})
+      def enter_completed_payment!(payment, opts={})
         if !self.for_payment(payment.id).first.nil?
           return {success: false, error: "Transaction already completed for payment"}
         end
@@ -74,7 +75,7 @@ module QuickBilling
         t.payment = payment
         t.amount = payment.amount
         t.state! :completed
-        t.account = acct
+        t.account = payment.account
         success = t.save
         if success
           t.account.modify_balance! -t.amount
@@ -168,6 +169,7 @@ module QuickBilling
       ret[:amount] = self.amount
       ret[:state] = self.state
       ret[:created_at] = self.created_at.to_i
+      ret[:invoice_id] = self.iid.to_s
 
       return ret
     end

@@ -1,6 +1,6 @@
 module QuickBilling
 
-  module BillingPlan
+  module Plan
 
     def self.included(base)
       base.extend ClassMethods
@@ -8,7 +8,7 @@ module QuickBilling
 
     module ClassMethods
 
-      def quick_billing_billing_plan_keys_for(db)
+      def quick_billing_plan_keys_for(db)
         if db == :mongoid
           include MongoHelper::Model
 
@@ -19,6 +19,7 @@ module QuickBilling
           field :pu, as: :period_unit, type: String, default: 'month'   # period in months
           field :av, as: :is_available, type: Boolean, default: true
           field :pb, as: :is_public, type: Boolean, default: true
+          field :mrh, as: :metrics, type: Hash, default: Hash.new
 
           mongoid_timestamps!
 
@@ -32,6 +33,9 @@ module QuickBilling
       end
 
       def add_plan!(key, name, price)
+        if self.with_key(key).count > 0
+          raise "Plan with key already created"
+        end
         plan = self.new
         plan.key = key.to_s
         plan.name = name
@@ -41,6 +45,10 @@ module QuickBilling
       end
 
       def with_key(key)
+        self.find_with_key(key)
+      end
+
+      def find_with_key(key)
         self.where(ky: key).first
       end
 
@@ -65,6 +73,9 @@ module QuickBilling
       ret[:name] = self.name
       ret[:key] = self.key
       ret[:price] = self.price
+      ret[:metrics] = self.metrics
+      ret[:period_unit] = self.period_unit
+      ret[:period_interval] = self.period_interval
 
       return ret
     end

@@ -1,16 +1,18 @@
 require "quick_billing/version"
-require "quick_billing/billing_account"
+require "quick_billing/account"
 require "quick_billing/payment"
-require "quick_billing/billing_plan"
+require "quick_billing/plan"
 require "quick_billing/transaction"
 require "quick_billing/subscription"
+require "quick_billing/adjustment"
+require "quick_billing/coupon"
 require "quick_billing/adapters/braintree_adapter"
 
 module QuickBilling
   # Your code goes here...
 
   PAYMENT_PLATFORMS = {paypal: 1, braintree: 2}
-  ACCOUNT_TYPES = {credit_card: 1}
+  PAYMENT_TYPES = {credit_card: 1}
 
   ## CONFIGURATION
 
@@ -42,12 +44,15 @@ module QuickBilling
   end
 
   def self.setup_classes
-    @options[:classes] ||= {}
-    @options[:classes][:subscription] ||= ::Subscription
-    @options[:classes][:billing_plan] ||= ::BillingPlan
-    @options[:classes][:transaction] ||= ::Transaction
-    @options[:classes][:billing_account] ||= ::BillingAccount
-    @options[:classes][:payment] ||= ::Payment
+    @options[:classes] = (@options[:classes] || {}).with_indifferent_access
+    mm = @options[:class_module] || ""
+    @options[:classes][:account] ||= "#{mm}::Account"
+    @options[:classes][:transaction] ||= "#{mm}::Transaction"
+    @options[:classes][:payment] ||= "#{mm}::Payment"
+    @options[:classes][:subscription] ||= "#{mm}::Subscription"
+    @options[:classes][:plan] ||= "#{mm}::Plan"
+    @options[:classes][:adjustment] ||= "#{mm}::Adjustment"
+    @options[:classes][:coupon] ||= "#{mm}::Coupon"
   end
 
   def self.setup_braintree
@@ -69,7 +74,35 @@ module QuickBilling
   end
 
   def self.models
-    self.options[:classes]
+    @models ||= begin
+      ret = {}
+      @options[:classes].each do |k,v|
+        ret[k.to_sym] = v.constantize
+      end
+      ret
+    end
+  end
+
+  def self.Account
+    self.models[:account]
+  end
+  def self.Transaction
+    self.models[:transaction]
+  end
+  def self.Payment
+    self.models[:payment]
+  end
+  def self.Plan
+    self.models[:plan]
+  end
+  def self.Subscription
+    self.models[:subscription]
+  end
+  def self.Adjustment
+    self.models[:adjustment]
+  end
+  def self.Coupon
+    self.models[:coupon]
   end
 
   ## HELPERS
@@ -96,7 +129,7 @@ module QuickBilling
       pm = PaymentMethod.new(
         platform: :braintree,
         customer_id: card.customer_id,
-        type: QuickBilling::ACCOUNT_TYPES[:credit_card],
+        type: QuickBilling::PAYMENT_TYPES[:credit_card],
         token: card.token,
         number: card.masked_number,
         expiration_date: card.expiration_date,
@@ -111,17 +144,28 @@ module QuickBilling
       end
     end
 
+    def [](field)
+      return self.send(field.to_s)
+    end
+
+    def type?(val)
+      self.type == QuickBilling::PAYMENT_TYPES[val.to_sym]
+    end
+
+    def to_hash
+      {
+        "platform" => self.platform,
+        "customer_id" => self.customer_id,
+        "type" => self.type,
+        "token" => self.token,
+        "number" => self.number,
+        "expiration_date" => self.expiration_date,
+        "card_type" => self.card_type
+      }
+    end
 
     def to_api
-      {
-        platform: self.platform,
-        customer_id: self.customer_id,
-        type: self.type,
-        token: self.token,
-        number: self.number,
-        expiration_date: self.expiration_date,
-        card_type: self.card_type
-      }
+      self.to_hash.symbolize_keys
     end
 
   end

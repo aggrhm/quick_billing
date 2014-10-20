@@ -16,20 +16,36 @@ module QuickBilling
           field :tk, as: :token, type: String
           field :st, as: :state, type: Integer
           field :st_at, as: :state_changed_at, type: Time
-          field :pm, as: :payment_method, type: Hash
+          field :pm, type: Hash
           field :am, as: :amount, type: Integer
           field :ds, as: :description, type: String
           field :sa, as: :status, type: String
-          field :aid, as: :accountable_id, type: Moped::BSON::ObjectId
-          field :acl, as: :accountable_class, type: String
+
+          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.Account.to_s
 
           mongoid_timestamps!
 
           enum_methods! :state, STATES
 
+          define_method :payment_method do
+            self.pm.nil? ? nil : QuickBilling::PaymentMethod.new(self.pm)
+          end
+
+          define_method :payment_method= do |val|
+            if val.nil?
+              self.pm = nil
+            elsif val.is_a? QuickBilling::PaymentMethod
+              self.pm = val.to_hash
+            elsif val.is_a? Hash
+              self.pm = val
+            else
+              raise "Cannot convert #{val.class.to_s} to mongo"
+            end
+          end
+
         end
 
-        scope :for_accountable, lambda {|aid|
+        scope :for_account, lambda {|aid|
           where(aid: aid)
         }
 
@@ -43,7 +59,10 @@ module QuickBilling
 
       end
 
-      def send_payment!(accountable, payment_method, amt, opts={})
+      def send_payment!(opts)
+        acct = opts[:account]
+        payment_method = opts[:payment_method]
+        amt = opts[:amount]
         return {success: false, error: "Cannot charge non-positive amount."} if amt < 0
 
         begin
@@ -51,24 +70,12 @@ module QuickBilling
           p = self.new
           p.state! :entered
           p.amount = amt
-          p.accountable = accountable
+          p.account = acct
           p.payment_method = payment_method
-          if p.save
-            if p.process_payment!
-              # notify accountable
-              result = p.accountable.handle_payment_completed(p)
-              if result[:success]
-                success = true
-              else
-                success = false
-                p.state! :error
-                p.status = result[:error]
-                p.save
-              end
-            end
+          # TODO: if payment doesn't clear immediately, enter transaction as processing and lookup later when transaction completes. If transaction errors, make processing transaction void and update balance
+          if p.save && p.process_payment!
+            success = true
           end
-
-          Job.run_later :billing, accountable, :handle_payment_attempted, [p.id]
           return {success: success, data: p, error: p.status}
         rescue Exception => e
           p.state! :error
@@ -83,19 +90,8 @@ module QuickBilling
 
     ## INSTANCE METHODS
 
-    def accountable=(val)
-      self.accountable_id = val.id
-      self.accountable_class = val.class.to_s
-      return val
-    end
-
-    def accountable
-      base = Object.const_get(self.accountable_class)
-      base.find(self.accountable_id)
-    end
-
     def process_payment!
-      acct = self.accountable
+      acct = self.account
       pm = self.payment_method
 
       result = QuickBilling.platform.send_payment(
@@ -117,14 +113,15 @@ module QuickBilling
         Job.run_later :billing, self, :handle_error
         return false
       end
+      Job.run_later :billing, self, :handle_attempted
     end
 
+    def handle_attempted
+    end
     def handle_completed
-
+      result = QuickBilling.Transaction.enter_completed_payment!(payment)
     end
-
     def handle_error
-
     end
 
     def to_api(opt=:full)
@@ -132,7 +129,7 @@ module QuickBilling
       ret[:id] = self.id.to_s
       ret[:amount] = self.amount
       ret[:created_at] = self.created_at.to_i
-      ret[:payment_method] = self.payment_method
+      ret[:payment_method] = self.payment_method.nil? ? nil : self.payment_method.to_api
       ret[:state] = self.state
       return ret
     end
