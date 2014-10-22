@@ -1,6 +1,6 @@
 module QuickBilling
 
-  module Plan
+  module Product
 
     def self.included(base)
       base.extend ClassMethods
@@ -8,7 +8,7 @@ module QuickBilling
 
     module ClassMethods
 
-      def quick_billing_plan_keys_for(db)
+      def quick_billing_product_keys_for(db)
         if db == :mongoid
           include MongoHelper::Model
 
@@ -32,16 +32,16 @@ module QuickBilling
         end
       end
 
-      def add_plan!(key, name, price)
+      def add_product!(key, name, price)
         if self.with_key(key).count > 0
-          raise "Plan with key already created"
+          raise "Product with key already created"
         end
-        plan = self.new
-        plan.key = key.to_s
-        plan.name = name
-        plan.price = price
-        plan.save
-        return plan
+        product = self.new
+        product.key = key.to_s
+        product.name = name
+        product.price = price
+        product.save
+        return product
       end
 
       def with_key(key)
@@ -56,15 +56,23 @@ module QuickBilling
 
     ## INSTANCE METHODS
 
-    def period
+    def period_length
       case self.period_unit
       when 'month'
         return self.period_interval.months
       when 'year'
         return self.period_interval.years
       else
-        raise 'Period cannot be determined'
+        return nil
       end
+    end
+
+    def period_length_hash
+      {interval: self.period_interval, unit: self.period_unit}
+    end
+
+    def has_period?
+      !self.period.nil?
     end
 
     def to_api(opt=:full)

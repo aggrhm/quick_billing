@@ -213,7 +213,7 @@ module QuickBilling
       ret[:id] = self.id
       ret[:balance] = self.balance
       ret[:payment_methods] = self.payment_methods.collect(&:to_api)
-      ret[:active_subscriptions] = self.active_subscriptions.collect(&:to_api)
+      ret[:active_subscription_ids] = self.active_subscriptions.collect{|s| s.id.to_s}
       return ret
     end
 

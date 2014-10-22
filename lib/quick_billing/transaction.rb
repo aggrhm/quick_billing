@@ -33,14 +33,15 @@ module QuickBilling
 
           mongoid_timestamps!
 
-          scope :for_account, lambda {|acct_id|
-            where(aid: acct_id).desc(:created_at)
-          }
-
           scope :completed, lambda {
             where(st: STATES[:completed])
           }
-
+          scope :for_account, lambda {|acct_id|
+            where(aid: acct_id).desc(:created_at)
+          }
+          scope :for_invoice, lambda {|inv_id|
+            where(iid: inv_id)
+          }
           scope :for_payment, lambda {|pid|
             where(pid: pid)
           }
@@ -55,6 +56,7 @@ module QuickBilling
         t.state!(opts[:state] || :completed)
         t.account = acct
         t.subscription = opts[:subscription]
+        t.invoice = opts[:invoice]
         success = t.save
         if success
           t.account.modify_balance! amt

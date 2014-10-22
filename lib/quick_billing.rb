@@ -1,11 +1,12 @@
 require "quick_billing/version"
 require "quick_billing/account"
 require "quick_billing/payment"
-require "quick_billing/plan"
+require "quick_billing/product"
 require "quick_billing/transaction"
 require "quick_billing/subscription"
-require "quick_billing/adjustment"
+require "quick_billing/entry"
 require "quick_billing/coupon"
+require "quick_billing/invoice"
 require "quick_billing/adapters/braintree_adapter"
 
 module QuickBilling
@@ -50,9 +51,10 @@ module QuickBilling
     @options[:classes][:transaction] ||= "#{mm}::Transaction"
     @options[:classes][:payment] ||= "#{mm}::Payment"
     @options[:classes][:subscription] ||= "#{mm}::Subscription"
-    @options[:classes][:plan] ||= "#{mm}::Plan"
-    @options[:classes][:adjustment] ||= "#{mm}::Adjustment"
+    @options[:classes][:product] ||= "#{mm}::Product"
+    @options[:classes][:entry] ||= "#{mm}::Entry"
     @options[:classes][:coupon] ||= "#{mm}::Coupon"
+    @options[:classes][:invoice] ||= "#{mm}::Invoice"
   end
 
   def self.setup_braintree
@@ -92,17 +94,20 @@ module QuickBilling
   def self.Payment
     self.models[:payment]
   end
-  def self.Plan
-    self.models[:plan]
+  def self.Product
+    self.models[:product]
   end
   def self.Subscription
     self.models[:subscription]
   end
-  def self.Adjustment
-    self.models[:adjustment]
+  def self.Entry
+    self.models[:entry]
   end
   def self.Coupon
     self.models[:coupon]
+  end
+  def self.Invoice
+    self.models[:invoice]
   end
 
   ## HELPERS

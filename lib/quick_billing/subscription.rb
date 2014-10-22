@@ -2,7 +2,7 @@ module QuickBilling
 
   module Subscription
 
-    STATES = {inactive: 1, active: 2, cancelled: 3}
+    STATES = {inactive: 1, active: 2, cancelled: 3, created: 4}
 
     def self.included(base)
       base.extend ClassMethods
@@ -14,17 +14,19 @@ module QuickBilling
         if db == :mongoid
           include MongoHelper::Model
 
-          field :pk, as: :plan_key, type: String
           field :st, as: :state, type: Integer
           field :st_at, as: :state_changed_at, type: Time
+          field :pi, as: :period_interval, type: Integer, default: 1   # period in months
+          field :pu, as: :period_unit, type: String, default: 'month'   # period in months
           field :p_st, as: :period_start, type: Time
           field :p_end, as: :period_end, type: Time
           field :li_id, as: :last_invoice_id
-          field :qn, as: :quantity, type: Integer, default: 1
-          field :ar, as: :autorenew, type: Boolean, default: true
+          field :ar, as: :is_autorenewable, type: Boolean, default: true
+          field :pr, as: :is_prorateable, type: Boolean, default: false
+          field :ia, as: :invoiceable_amount, type: Integer
 
           belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.Account.to_s
-          has_many :adjustments, :class_name => QuickBilling.Adjustment.to_s, :dependent => :destroy
+          has_many :entries, :class_name => QuickBilling.Entry.to_s, :dependent => :destroy
 
           mongoid_timestamps!
 
@@ -34,7 +36,7 @@ module QuickBilling
             where(st: STATES[:active])
           }
           scope :expired, lambda {
-            where(:ex_at => {'$lt' => Time.now})
+            where(:p_end => {'$lt' => Time.now})
           }
           scope :for_account, lambda {|aid|
             where(aid: aid)
@@ -43,51 +45,66 @@ module QuickBilling
 
       end
 
-      def subscribe_to_plan(account, plan_key, opts={})
-        # find plan with plan key
-        plan = QuickBilling.Plan.find_with_key(plan_key)
-
-        return {success: false, error: "No plan with key"} if plan.nil?
-        return {success: false, error: "Plan is no longer available"} if !plan.is_available?
-
-        # create subscription
+      def build_subscription(account, base_entries, opts={})
+        # prepare subscription
         sub = self.new
         sub.account = account
-        sub.plan_key = plan.key
-        sub.state! :inactive
-        sub.autorenew = true
-        sub.quantity = opts[:quantity].to_i if opts[:quantity]
-        
-        # handle coupons
-        if opts[:coupon_codes]
-          coupon_codes = opts[:coupon_codes].split(",") if opts[:coupon_codes].is_a?(String)
-          coupon_codes.each do |code|
-            coupon = QuickBilling.Coupon.find_with_code(code)
-            if coupon.nil? || !coupon.redeemable_by_account?(account.id)
-              return {success: false, error: "Coupon code is invalid"}
-            else
-              res = sub.add_adjustment({coupon: coupon}) if coupon
-              if res[:success] = false
-                return {success: false, data: sub, error: res[:error]}
-              end
+        sub.state! :created
+        sub.is_autorenewable = true
+        sub.period_interval = 1
+        sub.period_unit = 'month'
+        sub.period_start = Time.now
+        sub.period_end = Time.now + sub.period_length
+
+        # prepare entries
+        entries = sub.invoiceable_entries
+        base_entries.each do |entry|
+          if entry["source"] == QuickBilling::Entry::SOURCES[:product]
+            product = QuickBilling.Product.find(entry["id"])
+            if product.nil? || !product.is_available? || product.period_length_hash != sub.period_length_hash
+              return {success: false, data: sub, error: "Plan not available"}
             end
+            next if entries.any?{|en| en.product_id == product.id}
+            e = QuickBilling.Entry.build_from_product(product, entry["quantity"].to_i)
+          elsif entry["source"] == QuickBilling::Entry::SOURCES[:discount]
+            coupon = QuickBilling.Coupon.find_with_code(entry["code"])
+            if coupon.nil? || !coupon.redeemable_by_account?(account.id) || !coupon.style?(:subscription)
+              return {success: false, data: sub, error: "Coupon code is invalid"}
+            end
+            next if entries.any?{|en| en.coupon_id == coupon.id}
+            e = QuickBilling.Entry.build_from_coupon(coupon)
           end
+          if !e.valid?
+            return {success: false, data: sub, error: "Subscription entry invalid"}
+          end
+          entries << e
         end
 
+        inv = sub.build_invoice
         if opts[:start] != true && opts[:start] != "true"
           return {success: true, data: sub}
         end
 
         # ensure credit card if amount is positive
-        if sub.final_amount > 0 && !sub.account.has_valid_payment_method?
+        if inv.total > 0 && !sub.account.has_valid_payment_method?
           return {success: false, data: sub, error: "Billing account for this subscription must have a valid payment method"}
         end
 
-        sub.save
+        # commit everything
+        if !sub.valid?
+          return {success: false, data: sub, error: sub.errors.values.flatten[0]}
+        end
+
+        sub.save!
+        entries.each do |entry|
+          entry.subscription = sub
+          entry.account = sub.account
+          entry.save!
+        end
 
         # enter charge
         result = sub.renew!
-        return {success: false, data: sub, error: 'Could not activate subscription.'} if result[:success] == false
+        return {success: false, data: sub, error: result[:error]} if result[:success] == false
 
         Job.run_later :billing, sub, :handle_activated
         return {success: true, data: sub}
@@ -96,7 +113,7 @@ module QuickBilling
       def process_expired_subscriptions(opts={})
         self.active.expired.each do |sub|
           Rails.logger.info "#{Time.now.to_s} : Adding job for expired subscription."
-          if sub.autorenew == true
+          if sub.is_autorenewable == true
             Job.run_later :billing, sub, :renew!
           else
             Job.run_later :billing, sub, :cancel!
@@ -110,116 +127,82 @@ module QuickBilling
 
     # ACCESSORS
 
-    def plan
-      QuickBilling.Plan.find_with_key(self.plan_key)
+    def product_entries
+      self.invoiceable_entries.select{|e| e.source? :product }
     end
 
     def last_invoice
-      QuickBilling.Invoice.find(self.last_invoice_id)
+      @last_invoice ||= QuickBilling.Invoice.find(self.last_invoice_id)
     end
 
-    def discounts
-      Adjustment.for_subscription(self.id).from_discount
+    def invoiceable_entries
+      @invoiceable_entries ||= QuickBilling.Entry.for_subscription(self.id).invoiceable.to_a
     end
-
-    def taxes
-      Adjustment.for_subscription(self.id).from_tax
+    def invoiceable_entries=(val)
+      @invoiceable_entries=(val)
     end
 
     def expired?
+      return false if self.period_end.nil?
       self.period_end < Time.now
     end
 
-    def add_adjustment(opts)
-
-      adj = QuickBilling.Adjustment.new
-      if (coupon = opts[:coupon])
-        adj.name = "Coupon"
-        adj.source! :discount
-        adj.amount = coupon.amount
-        adj.percent = coupon.percent
-        adj.times_used = 0
-        adj.max_uses = coupon.max_uses
-        adj.coupon_code = coupon.code
-        adj.subscription = self
-        adj.account = self.account
-        if self.adjustments.select{|adj| adj.coupon_code == coupon.code}.length > 0
-          return {success: false, error: "Coupon code already added"}
-        end
-        if !coupon.style?(:subscription)
-          return {success: false, error: "Coupon is not for subscriptions"}
-        end
-      end
-      if adj.save
-        return {success: true, data: adj}
+    def period_length
+      case self.period_unit
+      when 'month'
+        return self.period_interval.months
+      when 'year'
+        return self.period_interval.years
       else
-        return {success: false, error: adj.error_message}
+        return nil
       end
     end
 
-    def amount
-      self.quantity * self.plan.price
-    end
-
-    def upcoming_invoice
-      inv = Invoice.new
-      inv.subscription = self
-      inv.account = self.account
-      inv.state! :open
-      # add plan
-      inv.add_item("#{self.plan.name} Plan (Quantity: #{self.quantity})", self.amount)
-      # add adjustments
-      # process discount adjustments first
-      adjs = self.usable_adjustments
-      adjs.select{|adj| adj.source?(:discount)}.each do |adj|
-        inv.add_adjustment("Discount", #{
-        a = adj.adjust_amount(a)
-      end
-      # then process tax adjustments
-      adjs.select{|adj| adj.source?(:tax)}.each do |adj|
-        a = adj.adjust_amount(a)
-      end
-
-      a = 0 if a < 0 
-      return a
-    end
-
-    def final_amount
-      self.adjusted_amount
+    def period_length_hash
+      {interval: self.period_interval, unit: self.period_unit}
     end
 
     # TRANSACTIONS
 
+    def build_invoice
+      entries = self.invoiceable_entries
+      inv = QuickBilling.Invoice.new
+      inv.subscription = self
+      inv.account = self.account
+      inv.description = "Subscription Billing Invoice"
+      inv.state! :open
+      inv.period_start = self.period_start
+      inv.period_end = self.period_end
+      inv.parse_entries(entries)
+      self.invoiceable_amount = inv.total
+      return inv
+    end
+
     def renew!
-      if !self.expired?
+      if self.state?(:active) && !self.expired?
         return {success: false, error: "Cannot renew this subscripton because it has more time left."}
       end
 
-      amt = self.final_amount
-      success = false
-      t = nil
-      if amt > 0
-        res = QuickBilling.enter_charge!(self.account, self.final_amount, {
-          description: "Subscription: #{self.plan.name}",
-          subscription: self
-        })
-        success = res[:success]
-        t = res[:data]
-      else
-        success = true
-      end
+      inv = self.build_invoice
+      resp = inv.charge_to_account!(self.account)
 
-      if result[:success]
-        self.period_start = self.period_end || Time.now
-        self.period_end = self.period_start + self.plan.period
-        self.last_invoice_id = 
-        self.state! :active
+      begin
+        if resp[:success]
+          self.period_start = self.period_end || Time.now
+          self.period_end = self.period_start + self.period_length
+          self.last_invoice_id = inv.id
+          self.state! :active
+          self.save
+          Job.run_later :billing, self, :handle_renewed
+          return {success: true}
+        else
+          return {success: false, error: "Could not build invoice for Subscription"}
+        end
+      rescue
+        inv.void!
+        self.state! :inactive
         self.save
-        # update account balance
-        Job.run_later :billing, self, :handle_renewed
-        return {success: true}
-      else
-        return {success: false}
+        return {success: false, error: "An error occurred processing the Invoice"}
       end
     end
 
@@ -249,31 +232,48 @@ module QuickBilling
       # TODO: allow update plan or quantity, cancel or prorate subscription
     end
 
+    def add_coupon(coupon)
+
+      e = QuickBilling.Entry.new
+      e.source! :discount
+      e.coupon = coupon
+      e.name = "Coupon"
+      e.amount = coupon.amount
+      e.percent = coupon.percent
+      e.periods_left = coupon.max_uses
+      e.subscription = self
+      e.account = self.account
+      if self.entries.select{|entry| entry.coupon.id.to_s == coupon.id.to_s}.length > 0
+        return {success: false, error: "Coupon code already added"}
+      end
+      if !coupon.style?(:subscription)
+        return {success: false, error: "Coupon is not for subscriptions"}
+      end
+      if e.save
+        return {success: true, data: e}
+      else
+        return {success: false, error: e.error_message}
+      end
+    end
+
     def handle_activated
     end
     def handle_renewed
-      # increment adjustments
-      self.usable_adjustments.each do |adj|
-        adj.times_used += 1 if !adj.max_uses.nil?
-      end
-      self.save
     end
     def handle_cancelled
     end
 
     # API
 
-    def to_api(opt=:full)
+    def to_api(opt=:default)
       ret = {}
       ret[:id] = self.id.to_s
-      ret[:plan_key] = self.plan_key
-      ret[:plan] = self.plan.to_api
-      ret[:amount] = self.amount
-      ret[:final_amount] = self.final_amount
-      ret[:quanity] = self.quantity
       ret[:period_start] = self.period_start.to_i
       ret[:period_end] = self.period_end.to_i
+      ret[:is_autorenewable] = self.is_autorenewable
       ret[:last_invoice_id] = self.last_invoice_id.to_s
+      ret[:entries] = self.invoiceable_entries.collect{|e| e.to_api}
+      ret[:invoiceable_amount] = self.invoiceable_amount
       ret[:state] = self.state
       return ret
     end
