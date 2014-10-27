@@ -79,14 +79,17 @@ module QuickBilling
       self.active_subscriptions.first
     end
 
-    def active_subscriptions
-      QuickBilling.Subscription.for_account(self.id).active
+    def active_subscriptions(reload=false)
+      if @active_subscriptions.nil? || reload
+        @active_subscriptions = QuickBilling.Subscription.for_account(self.id).active.to_a
+      end
+      @active_subscriptions
     end
 
     # ACCESSORS
 
     def state
-      if self.balance > 0 && self.balance_overdue_at < Time.now
+      if self.balance > 200 && self.balance_overdue_at < Time.now
         return STATES[:delinquent]
       else
         return STATES[:paid]
@@ -95,6 +98,9 @@ module QuickBilling
 
     def is_paid?
       return self.state == STATES[:paid]
+    end
+    def is_delinquent?
+      return self.state == STATES[:delinquent]
     end
 
     def admin_users
@@ -163,7 +169,7 @@ module QuickBilling
 
       if old_bal >= 0 && new_bal < 0
         # if old balance was not negative, set balance_overdue_at
-        self.balance_overdue_at = Time.now + 14.days
+        self.balance_overdue_at = Time.now + 3.days
       elsif old_bal < 0 && new_bal >= 0
         # if balance is now not negative, reset balance_overdue_at
         self.balance_overdue_at = nil
@@ -212,6 +218,8 @@ module QuickBilling
       ret = {}
       ret[:id] = self.id
       ret[:balance] = self.balance
+      ret[:state] = self.state
+      ret[:balance_overdue_at] = self.balance_overdue_at.to_i unless self.balance_overdue_at.nil?
       ret[:payment_methods] = self.payment_methods.collect(&:to_api)
       ret[:active_subscription_ids] = self.active_subscriptions.collect{|s| s.id.to_s}
       return ret

@@ -79,6 +79,15 @@ module QuickBilling
         end
       end
 
+      def self.void_payment(token)
+        result = Braintree::Transaction.void(token)
+        if result.success?
+          return {success: true, id: token}
+        else
+          return {success: false, error: result.message, orig: result}
+        end
+      end
+
 
     end
 

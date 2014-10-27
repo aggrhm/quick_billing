@@ -147,11 +147,8 @@ module QuickBilling
     def update_invoice_stats_for_entries
       self.items.each do |item|
         entry = QuickBilling.Entry.find(item["entry_id"])
-        if !entry.nil? && !entry.invoice_limit.nil?
-          count = Invoice.is_state(:charged).with_entry(entry.id)
-          entry.invoices_left = entry.invoice_limit - count
-          entry.save
-        end
+        next if entry.nil?
+        entry.invoice_count(true)
       end
     end
 

@@ -8,6 +8,7 @@ module QuickBilling
   module Entry
 
     SOURCES = {discount: 1, tax: 2, prorate: 3, product: 4}
+    STATES = {valid: 1, voided: 2}
 
     def self.included(base)
       base.extend ClassMethods
@@ -19,10 +20,12 @@ module QuickBilling
         if db == :mongoid
           include MongoHelper::Model
           field :ds, as: :description, type: String
+          field :st, as: :state, type: Integer, default: 1
           field :sr, as: :source, type: Integer
           field :am, as: :amount, type: Integer
           field :pr, as: :percent, type: Integer
           field :il, as: :invoices_left, type: Integer
+          field :ic, type: Integer, default: 0    # invoice count
           field :im, as: :invoice_limit, type: Integer
           field :qn, as: :quantity, type: Integer, default: 1
 
@@ -36,6 +39,7 @@ module QuickBilling
           attr_alias :product_id, :pid
 
           enum_methods! :source, SOURCES
+          enum_methods! :state, STATES
         end
 
         scope :for_coupon, lambda {|cid|
@@ -62,12 +66,19 @@ module QuickBilling
         scope :is_product, lambda {
           where(sr: SOURCES[:product])
         }
+        scope :is_valid, lambda {
+          where('st' => {'$ne' => 2})
+        }
         scope :invoiceable, lambda {
-          where('$or' => [{il: nil}, {'il' => {'$exists' => false}}, {'il' => {'$gt' => 1}}])
+          is_valid.where('$or' => [{il: nil}, {'il' => {'$exists' => false}}, {'il' => {'$gt' => 0}}])
+        }
+        scope :invoiced, lambda {
+          where(:ic => {'$gt' => 0})
         }
 
         validate do
           errors.add(:amount, "Must specify an amount or a percent") if self.amount.nil? && self.percent.nil?
+          errors.add(:quantity, "Quantity must be greater than 0") if self.quantity <= 0
         end
 
       end
@@ -100,12 +111,20 @@ module QuickBilling
       self.max_uses.nil? || (self.times_used < self.max_uses)
     end
 
-    def invoice_count
-      count = Invoice.is_state(:charged).with_entry(self.id).count
-      if !self.invoices_left.nil? && self.invoices_left != (self.invoice_limit - count)
-        self.invoices_left = self.invoice_limit - count
+    def invoiced?
+      self.invoice_count(true) > 0
+    end
+
+    def invoice_count(reload=false)
+      if reload
+        count = Invoice.is_state(:charged).with_entry(self.id).count
+        if !self.invoice_limit.nil?
+          self.invoices_left = self.invoice_limit - count
+        end
+        self.ic = count
         self.save
       end
+      self.ic
     end
 
     def adjust_amount(a)

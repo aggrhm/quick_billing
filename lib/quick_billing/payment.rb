@@ -73,10 +73,16 @@ module QuickBilling
           p.account = acct
           p.payment_method = payment_method
           # TODO: if payment doesn't clear immediately, enter transaction as processing and lookup later when transaction completes. If transaction errors, make processing transaction void and update balance
-          if p.save && p.process_payment!
-            success = true
+          if p.save
+            res = p.process_payment!
+            if res[:success]
+              return {success: true, data: p}
+            else
+              return {success: false, data: p, error: res[:error]}
+            end
+          else
+            return {success: false, data: p, error: "Payment could not be entered"}
           end
-          return {success: success, data: p, error: p.status}
         rescue Exception => e
           p.state! :error
           p.status = e.message
@@ -99,27 +105,43 @@ module QuickBilling
         payment_method: pm
       )
 
-      if result[:success]
-        self.state! :completed
-        self.token = result[:id]
-        self.save
-        Job.run_later :billing, self, :handle_completed
-        return true
-      else
+      if !result[:success]
         self.state! :error
         self.token = result[:id]
         self.status = result[:error]
         self.save
+        Job.run_later :billing, self, :handle_attempted
         Job.run_later :billing, self, :handle_error
-        return false
+        return {success: false, error: result[:error]}
       end
-      Job.run_later :billing, self, :handle_attempted
+
+      begin
+        self.state! :completed
+        self.token = result[:id]
+        self.save
+        Job.run_later :billing, self, :handle_attempted
+        Job.run_later :billing, self, :handle_completed
+
+        # enter transaction
+        result = QuickBilling.Transaction.enter_completed_payment!(self)
+        if result[:success]
+          return {success: true}
+        else
+          return {success: false, error: result[:error]}
+        end
+      rescue
+        QuickBilling.platform.void_payment(result[:id])
+        self.state! :error
+        self.token = result[:id]
+        self.save
+        Job.run_later :billing, self, :handle_error
+        return {success: false, error: "An error occurred processing this payment"}
+      end
     end
 
     def handle_attempted
     end
     def handle_completed
-      result = QuickBilling.Transaction.enter_completed_payment!(payment)
     end
     def handle_error
     end

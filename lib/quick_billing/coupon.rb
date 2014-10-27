@@ -28,7 +28,7 @@ module QuickBilling
       end
 
       def find_with_code(code)
-        where(cd: code.strip).first
+        where(cd: code.strip).first || find(code)
       end
 
     end
@@ -52,11 +52,11 @@ module QuickBilling
 
     def redeemed_by_account?(aid)
       # check adjustments
-      QuickBilling.Entry.for_coupon(self.id).for_account(aid).count > 0
+      QuickBilling.Entry.invoiced.for_coupon(self.id).for_account(aid).count > 0
     end
 
     def times_redeemed
-      QuickBilling.Entry.for_coupon(self.id).count
+      QuickBilling.Entry.invoiced.for_coupon(self.id).count
     end
 
     def to_api(opt=:default)
