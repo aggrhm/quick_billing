@@ -216,7 +216,7 @@ module QuickBilling
 
     def to_api(opt=:full)
       ret = {}
-      ret[:id] = self.id
+      ret[:id] = self.id.to_s
       ret[:balance] = self.balance
       ret[:state] = self.state
       ret[:balance_overdue_at] = self.balance_overdue_at.to_i unless self.balance_overdue_at.nil?
