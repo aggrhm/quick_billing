@@ -272,9 +272,9 @@ module QuickBilling
 
       inv = self.build_invoice
       return {success: false, error: "Could not build invoice"} if inv.nil?
-      resp = inv.charge_to_account!(self.account)
 
       begin
+        resp = inv.charge_to_account!(self.account)
         if resp[:success]
           if self.state?(:active)
             # already active, just advance from previous period

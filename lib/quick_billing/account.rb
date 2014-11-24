@@ -182,7 +182,12 @@ module QuickBilling
     end
 
     def modify_balance!(amt)
-      self.inc(:bl, amt)
+      mv = Mongoid::VERSION.to_i
+      if mv < 4
+        self.inc(:bl, amt)
+      else
+        self.inc(bl: amt)
+      end
     end
 
     def enter_payment!(amt = nil)
