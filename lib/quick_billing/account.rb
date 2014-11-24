@@ -171,11 +171,11 @@ module QuickBilling
       end
 
 
-      if old_bal > 0 && new_bal <= 0
+      if !self.balance_overdue_at.nil? && new_bal <= 0
         # if balance is now back to no debt, reset balance_overdue_at
         self.balance_overdue_at = nil
-      elsif old_bal <= 0 && new_bal > 0
-        # if old balance was negative and new balance is positive, set balance_overdue_at
+      elsif self.balance_overdue_at.nil? && new_bal > 0
+        # if new balance is positive, set balance_overdue_at
         self.balance_overdue_at = Time.now + 3.days
       end
 
