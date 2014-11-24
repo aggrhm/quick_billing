@@ -127,6 +127,14 @@ module QuickBilling
       self.ic
     end
 
+    def save_if_persisted
+      if self.new_record?
+        return self.valid?
+      else
+        return self.save
+      end
+    end
+
     def adjust_amount(a)
       if !self.amount.nil?
         return a + self.amount

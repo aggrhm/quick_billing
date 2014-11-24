@@ -80,16 +80,7 @@ module QuickBilling
         end
 
         # commit everything
-        if !sub.valid?
-          return {success: false, data: sub, error: sub.errors.values.flatten[0]}
-        end
-
-        sub.save!
-        entries.each do |entry|
-          entry.subscription = sub
-          entry.account = sub.account
-          entry.save!
-        end
+        sub.save_with_entries
 
         # enter charge
         result = sub.renew!
@@ -183,7 +174,21 @@ module QuickBilling
     # TRANSACTIONS
 
     # Adds entry to this subscription. Only saves if subscription is already saved.
-    #
+    
+    def save_with_entries
+      if !self.valid?
+        return {success: false, data: self, error: self.errors.values.flatten[0]}
+      end
+
+      self.save
+      self.invoiceable_entries.each do |entry|
+        entry.subscription = self if entry.sid.nil?
+        entry.account = self.account if entry.aid.nil?
+        entry.save
+      end
+      return {success: true, data: self}
+    end
+
     def add_entry(opts)
       opts = opts.symbolize_keys
       entries = self.invoiceable_entries(true)
