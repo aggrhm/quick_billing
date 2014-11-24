@@ -89,7 +89,7 @@ module QuickBilling
     # ACCESSORS
 
     def state
-      if self.balance > 200 && self.balance_overdue_at < Time.now
+      if self.balance > 200 && self.is_balance_overdue?
         return STATES[:delinquent]
       else
         return STATES[:paid]
@@ -101,6 +101,10 @@ module QuickBilling
     end
     def is_delinquent?
       return self.state == STATES[:delinquent]
+    end
+    def is_balance_overdue?
+      return false if self.balance_overdue_at.nil?
+      return self.balance_overdue_at < Time.now
     end
 
     def admin_users
@@ -167,12 +171,12 @@ module QuickBilling
       end
 
 
-      if old_bal >= 0 && new_bal < 0
-        # if old balance was not negative, set balance_overdue_at
-        self.balance_overdue_at = Time.now + 3.days
-      elsif old_bal < 0 && new_bal >= 0
-        # if balance is now not negative, reset balance_overdue_at
+      if old_bal > 0 && new_bal <= 0
+        # if balance is now back to no debt, reset balance_overdue_at
         self.balance_overdue_at = nil
+      elsif old_bal <= 0 && new_bal > 0
+        # if old balance was negative and new balance is positive, set balance_overdue_at
+        self.balance_overdue_at = Time.now + 3.days
       end
 
       self.balance = new_bal
