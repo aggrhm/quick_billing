@@ -18,4 +18,5 @@ Gem::Specification.new do |gem|
   gem.require_paths = ["lib"]
 
   gem.add_dependency 'braintree', '2.36.0'
+  gem.add_dependency 'money'
 end

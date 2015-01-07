@@ -1,3 +1,4 @@
+require "money"
 require "quick_billing/version"
 require "quick_billing/account"
 require "quick_billing/payment"

@@ -83,7 +83,35 @@ module QuickBilling
 
       end
 
+      def build_list(data)
+        data.collect {|d|
+          if d.is_a?(String)
+            self.find(d)
+          elsif d.is_a?(Hash)
+            self.build_from_hash(d)
+          elsif d.is_a?(self)
+            d
+          end
+        }.select{|e| !e.nil?}
+      end
+
+      def build_from_hash(opts)
+        opts = opts.symbolize_keys
+        e = self.find(opts[:id]) unless opts[:id].blank?
+        if e.nil?
+          case opts[:source]
+          when SOURCES[:product]
+            e = self.build_from_product(opts[:product_id], opts[:quantity].to_i)
+          when SOURCES[:discount]
+            e = self.build_from_coupon(opts[:coupon_id])
+          end
+        end
+        return e
+      end
+
       def build_from_coupon(coupon)
+        coupon = QuickBilling.Coupon.find_with_code(coupon) unless coupon.is_a?(QuickBilling.Coupon)
+        return nil if coupon.nil?
         e = self.new
         e.source! :discount
         e.coupon = coupon
@@ -96,6 +124,8 @@ module QuickBilling
       end
 
       def build_from_product(product, quantity)
+        product = QuickBilling.Product.find(product) unless product.is_a?(QuickBilling.Product)
+        return nil if product.nil?
         e = self.new
         e.source! :product
         e.product = product
@@ -117,7 +147,7 @@ module QuickBilling
 
     def invoice_count(reload=false)
       if reload
-        count = Invoice.is_state(:charged).with_entry(self.id).count
+        count = QuickBilling.Invoice.is_state(:charged).with_entry(self.id).count
         if !self.invoice_limit.nil?
           self.invoices_left = self.invoice_limit - count
         end
@@ -147,15 +177,28 @@ module QuickBilling
 
     end
 
+    def adjustment_str
+      if !self.amount.nil?
+        amt = Money.new(self.amount, "USD")
+        return amt.to_s
+      elsif !self.percent.nil?
+        return "#{self.percent}% #{self.percent < 0 ? 'off' : 'additional'}"
+      else
+        return "-"
+      end
+    end
+
     def to_api(opt=:default)
       ret = {}
-      ret[:id] = self.id.to_s
+      ret[:id] = self.id.to_s unless self.new_record?
       ret[:source] = self.source
       ret[:amount] = self.amount
       ret[:percent] = self.percent
       ret[:quantity] = self.quantity
-      ret[:coupon] = self.coupon.to_api if self.coupon
       ret[:product] = self.product.to_api if self.product
+      ret[:product_id] = self.product_id.to_s
+      ret[:coupon] = self.coupon.to_api if self.coupon
+      ret[:coupon_id] = self.coupon_id.to_s
       return ret
     end
 

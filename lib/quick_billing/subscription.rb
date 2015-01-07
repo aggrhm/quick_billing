@@ -21,9 +21,9 @@ module QuickBilling
           field :p_st, as: :period_start, type: Time
           field :p_end, as: :period_end, type: Time
           field :li_id, as: :last_invoice_id
+          field :la, as: :last_invoiced_amount, type: Integer
           field :ar, as: :is_autorenewable, type: Boolean, default: false
           field :pr, as: :is_prorateable, type: Boolean, default: false
-          field :ia, as: :invoiceable_amount, type: Integer
 
           belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.Account.to_s
           has_many :entries, :class_name => QuickBilling.Entry.to_s, :dependent => :destroy
@@ -60,19 +60,13 @@ module QuickBilling
         sub.period_end = Time.now + sub.period_length
 
         # prepare entries
-        entries = sub.invoiceable_entries
-        base_entries.each do |entry|
-          res = sub.add_entry(entry)
-          if res[:success] == false
-            return {success: false, data: sub, error: res[:error]}
-          end
-        end
+        entries = QuickBilling.Entry.build_list(base_entries)
+        result = self.prepare_entries(entries, billing_account: account)
+        return result if !result[:success]
+        sub.invoiceable_entries = result[:data]
 
-        inv = sub.build_invoice
-        return {success: false, error: "Could not build invoice"} if inv.nil?
-        if opts[:start] != true && opts[:start] != "true"
-          return {success: true, data: sub}
-        end
+        inv = QuickBilling.Invoice.from_entries(sub.invoiceable_entries)
+        sub.finalize_invoice(inv)
 
         # ensure credit card if amount is positive
         if inv.total > 0 && !sub.account.has_valid_payment_method?
@@ -249,23 +243,31 @@ module QuickBilling
       return {success: true}
     end
 
-    def finalize_entries!
-      # override this method to make changes to entries (i.e. adjust quantities)
-      return true
+    def update_entries!(new_entries)
+      result = self.class.prepare_entries(new_entries, {billing_account: self.account})
+      return result if !result[:success]
+
+      old_entries = self.invoiceable_entries(true)
+      nids = new_entries.collect{|e| e.id.to_s}
+
+      # remove any not in new_entries
+      old_entries.each do |e|
+        if !nids.include?(e.id.to_s)
+          self.remove_entry(e)
+        end
+      end
+
+      self.invoiceable_entries = result[:data]
+      self.save_with_entries
+      return {success: true}
     end
 
-    def build_invoice
-      return nil if !self.finalize_entries!
-      entries = self.invoiceable_entries(true)
-      inv = QuickBilling.Invoice.new
+    def finalize_invoice(inv)
       inv.subscription = self
       inv.account = self.account
       inv.description = "Subscription Billing Invoice"
-      inv.state! :open
       inv.period_start = self.period_start
       inv.period_end = self.period_end
-      inv.parse_entries(entries)
-      self.invoiceable_amount = inv.total
       return inv
     end
 
@@ -275,8 +277,12 @@ module QuickBilling
         return {success: false, error: "Cannot renew this subscripton because it has more time left."}
       end
 
-      inv = self.build_invoice
-      return {success: false, error: "Could not build invoice"} if inv.nil?
+      entries = self.invoiceable_entries(true)
+      result = self.class.prepare_entries(entries, billing_account: self.account)
+      return result if !result[:success]
+      self.save_with_entries
+      inv = QuickBilling.Invoice.from_entries(result[:data])
+      self.finalize_invoice(inv)
 
       begin
         resp = inv.charge_to_account!(self.account)
@@ -289,19 +295,21 @@ module QuickBilling
           end
           self.period_end = self.period_start + self.period_length
           self.last_invoice_id = inv.id
+          self.last_invoiced_amount = inv.charged_amount
           self.state! :active
           self.save
           Job.run_later :billing, self, :handle_renewed
           Job.run_later(:billing, self, :handle_activated) if is_activating
           return {success: true}
         else
-          return {success: false, error: "Could not build invoice for Subscription"}
+          return {success: false, error: "Could not charge invoice for Subscription"}
         end
-      rescue
+      rescue => ex
+        Rails.logger.info(ex.backtrace.join("\n\t")) if defined?(Rails)
         inv.void!
         self.state! :inactive
         self.save
-        return {success: false, error: "An error occurred processing the Invoice"}
+        return {success: false, error: "An error occurred processing the invoice"}
       end
     end
 
@@ -331,10 +339,6 @@ module QuickBilling
       # update balance
       Job.run_later :billing, self, :handle_cancelled
       return {success: true}
-    end
-
-    def update_plan!(opts)
-      # TODO: allow update plan or quantity, cancel or prorate subscription
     end
 
     def add_coupon(coupon)
@@ -378,7 +382,7 @@ module QuickBilling
       ret[:is_autorenewable] = self.is_autorenewable
       ret[:last_invoice_id] = self.last_invoice_id.to_s
       ret[:entries] = self.invoiceable_entries.collect{|e| e.to_api}
-      ret[:invoiceable_amount] = self.invoiceable_amount
+      ret[:last_invoiced_amount] = self.last_invoiced_amount
       ret[:state] = self.state
       return ret
     end

@@ -26,7 +26,7 @@ module QuickBilling
           scope :available, lambda {
             where(av: true)
           }
-          scope :public, lambda {
+          scope :is_public, lambda {
             where(pb: true)
           }
         end

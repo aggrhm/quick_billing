@@ -35,6 +35,7 @@ module QuickBilling
           field :p_st, as: :period_start, type: Time
           field :p_end, as: :period_end, type: Time
           field :its, as: :items, type: Array, default: []
+          field :ca, as: :charged_amount, type: Integer
 
           belongs_to :subscription, foreign_key: :sid, class_name: QuickBilling.Subscription.to_s
           belongs_to :account, foreign_key: :aid, class_name: QuickBilling.Account.to_s
@@ -53,18 +54,35 @@ module QuickBilling
         end
       end
 
+      def from_entries(entries)
+        inv = self.new
+        inv.state! :open
+        inv.parse_entries(entries)
+        return inv
+      end
+
     end
 
     ## INSTANCE METHODS
 
     def parse_entries(entries)
+      @entries = []
       entries.each do |entry|
         next if !entry.invoice_limit.nil? && entry.invoices_count >= entry.invoice_limit
         itm = {"source" => entry.source, "description" => entry.description, "amount" => entry.amount, "percent" => entry.percent, "quantity" => entry.quantity, "entry_id" => entry.id}
         self.items << itm
+        @entries << entry
       end
       self.calculate_totals
       self.items
+    end
+
+    def entries(reload=false)
+      eids = self.items.collect{|i| i['entry_id']}
+      if reload || @entries.nil?
+        @entries = QuickBilling.Entry.find(eids).select{|e| !e.nil?}
+      end
+      @entries
     end
 
     def charged_transaction
@@ -120,13 +138,15 @@ module QuickBilling
     # TRANSACTIONS
 
     def charge_to_account!(acct)
-      res = QuickBilling.Transaction.enter_charge!(acct, self.total, {
+      ttl = self.total
+      res = QuickBilling.Transaction.enter_charge!(acct, ttl, {
         invoice: self,
         subscription: self.subscription,
         description: self.description
       })
       if res[:success]
         self.state! :charged
+        self.charged_amount = ttl
         self.save
         Job.run_later :billing, self, :handle_charged
       end
@@ -160,9 +180,14 @@ module QuickBilling
       ret = {}
       ret[:id] = self.id.to_s
       ret[:description] = self.description
+      ret[:state] = self.state
       ret[:subtotal] = self.subtotal
       ret[:total] = self.total
       ret[:items] = self.items
+      ret[:created_at] = self.created_at.to_i
+      if opt==:full
+        ret[:entries] = self.entries.collect{|e| e.to_api}
+      end
       return ret
     end
 
