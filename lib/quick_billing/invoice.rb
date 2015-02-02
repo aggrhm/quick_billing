@@ -82,7 +82,7 @@ module QuickBilling
       if reload || @entries.nil?
         @entries = QuickBilling.Entry.find(eids).select{|e| !e.nil?}
       end
-      @entries
+      @entries.sort_by {|e| Entry::SOURCES_SORT_ORDER.index(e.source) || 100 }
     end
 
     def charged_transaction

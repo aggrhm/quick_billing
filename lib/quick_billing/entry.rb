@@ -8,6 +8,7 @@ module QuickBilling
   module Entry
 
     SOURCES = {discount: 1, tax: 2, prorate: 3, product: 4}
+    SOURCES_SORT_ORDER = [4, 3, 1, 2]
     STATES = {valid: 1, voided: 2}
 
     def self.included(base)
@@ -179,8 +180,8 @@ module QuickBilling
 
     def adjustment_str
       if !self.amount.nil?
-        amt = Money.new(self.amount, "USD")
-        return amt.to_s
+        amt = Money.new(self.amount * self.quantity, "USD")
+        return amt.format
       elsif !self.percent.nil?
         return "#{self.percent}% #{self.percent < 0 ? 'off' : 'additional'}"
       else
