@@ -69,7 +69,7 @@ module QuickBilling
       @entries = []
       entries.each do |entry|
         next if !entry.invoice_limit.nil? && entry.invoices_count >= entry.invoice_limit
-        itm = {"source" => entry.source, "description" => entry.description, "amount" => entry.amount, "percent" => entry.percent, "quantity" => entry.quantity, "entry_id" => entry.id}
+        itm = entry.to_line_item
         self.items << itm
         @entries << entry
       end
@@ -83,6 +83,10 @@ module QuickBilling
         @entries = QuickBilling.Entry.find(eids).select{|e| !e.nil?}
       end
       @entries.sort_by {|e| Entry::SOURCES_SORT_ORDER.index(e.source) || 100 }
+    end
+
+    def ordered_items
+      self.items.sort_by {|i| Entry::SOURCES_SORT_ORDER.index(i['source']) || 100 }
     end
 
     def charged_transaction
@@ -183,9 +187,11 @@ module QuickBilling
       ret[:state] = self.state
       ret[:subtotal] = self.subtotal
       ret[:total] = self.total
-      ret[:items] = self.items
+      ret[:items] = self.ordered_items
       ret[:created_at] = self.created_at.to_i
-      if opt==:full
+      ret[:period_start] = self.period_start.to_i
+      ret[:period_end] = self.period_end.to_i
+      if opt==:full_with_entries
         ret[:entries] = self.entries.collect{|e| e.to_api}
       end
       return ret

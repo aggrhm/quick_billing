@@ -248,6 +248,7 @@ module QuickBilling
       return result if !result[:success]
 
       old_entries = self.invoiceable_entries(true)
+      new_entries = result[:data]
       nids = new_entries.collect{|e| e.id.to_s}
 
       # remove any not in new_entries
@@ -259,7 +260,7 @@ module QuickBilling
 
       self.invoiceable_entries = result[:data]
       self.save_with_entries
-      return {success: true}
+      return {success: true, data: result[:data]}
     end
 
     def finalize_invoice(inv)
@@ -278,9 +279,9 @@ module QuickBilling
       end
 
       entries = self.invoiceable_entries(true)
-      result = self.class.prepare_entries(entries, billing_account: self.account)
+      # Ensure entries are valid
+      result = self.update_entries!(entries)
       return result if !result[:success]
-      self.save_with_entries
       inv = QuickBilling.Invoice.from_entries(result[:data])
       self.finalize_invoice(inv)
 

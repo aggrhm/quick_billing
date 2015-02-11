@@ -43,16 +43,16 @@ module QuickBilling
 
     def redeemable_by_account?(aid)
       return false if !(self.state?(:active) && self.redeemable?)
-      if self.style?(:subscription) && self.max_uses == nil
+      if self.max_uses == nil
         return true
       else
-        return !self.redeemed_by_account?(aid)
+        return self.times_redeemed_by_account(aid) < self.max_uses
       end
     end
 
-    def redeemed_by_account?(aid)
+    def times_redeemed_by_account(aid)
       # check adjustments
-      QuickBilling.Entry.invoiced.for_coupon(self.id).for_account(aid).count > 0
+      QuickBilling.Entry.invoiced.for_coupon(self.id).for_account(aid).count
     end
 
     def times_redeemed

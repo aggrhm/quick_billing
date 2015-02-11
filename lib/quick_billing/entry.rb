@@ -29,6 +29,7 @@ module QuickBilling
           field :ic, type: Integer, default: 0    # invoice count
           field :im, as: :invoice_limit, type: Integer
           field :qn, as: :quantity, type: Integer, default: 1
+          field :mth, as: :meta, type: Hash, default: {}
 
           belongs_to :subscription, foreign_key: :sid, class_name: QuickBilling.Subscription.to_s
           belongs_to :account, foreign_key: :aid, class_name: QuickBilling.Account.to_s
@@ -116,7 +117,7 @@ module QuickBilling
         e = self.new
         e.source! :discount
         e.coupon = coupon
-        e.description = "Coupon"
+        e.description = "Coupon (#{coupon.code})"
         e.amount = coupon.amount
         e.percent = coupon.percent
         e.invoices_left = coupon.max_uses
@@ -189,9 +190,31 @@ module QuickBilling
       end
     end
 
+    def to_line_item
+      ret = {}
+      ret['id'] = self.id.to_s
+      ret['entry_id'] = self.id.to_s
+      ret['source'] = self.source
+      ret['description'] = self.description
+      ret['amount'] = self.amount
+      ret['percent'] = self.percent
+      ret['quantity'] = self.quantity
+      ret['adjustment_str'] = self.adjustment_str
+      ret['invoice_limit'] = self.invoice_limit
+      ret['meta'] = self.meta
+      if !self.product.nil?
+        ret['product'] = self.product.to_api.stringify_keys
+      end
+      if !self.coupon.nil?
+        ret['coupon'] = self.coupon.to_api.stringify_keys
+      end
+      return ret
+    end
+
     def to_api(opt=:default)
       ret = {}
       ret[:id] = self.id.to_s unless self.new_record?
+      ret[:description] = self.description
       ret[:source] = self.source
       ret[:amount] = self.amount
       ret[:percent] = self.percent
@@ -200,6 +223,7 @@ module QuickBilling
       ret[:product_id] = self.product_id.to_s
       ret[:coupon] = self.coupon.to_api if self.coupon
       ret[:coupon_id] = self.coupon_id.to_s
+      ret[:meta] = self.meta
       return ret
     end
 
