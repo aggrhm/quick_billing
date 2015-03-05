@@ -84,7 +84,9 @@ module QuickBilling
       end
 
       def process_expired_subscriptions(opts={})
+        bfn = opts[:break_if]
         self.active.expired.each do |sub|
+          break if bfn && bfn.call == true
           Rails.logger.info "#{Time.now.to_s} : Adding job for expired subscription."
           if sub.is_autorenewable == true
             Job.run_later :billing, sub, :renew!
@@ -301,14 +303,14 @@ module QuickBilling
           self.save
           Job.run_later :billing, self, :handle_renewed
           Job.run_later(:billing, self, :handle_activated) if is_activating
-          return {success: true}
+          return {success: true, data: self, invoice: inv}
         else
           return {success: false, error: "Could not charge invoice for Subscription"}
         end
       rescue => ex
         Rails.logger.info(ex.backtrace.join("\n\t")) if defined?(Rails)
         inv.void!
-        self.state! :inactive
+        #self.state! :inactive
         self.save
         return {success: false, error: "An error occurred processing the invoice"}
       end

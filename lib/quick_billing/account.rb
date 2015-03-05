@@ -63,8 +63,10 @@ module QuickBilling
         end
       end
 
-      def process_unbilled_accounts
+      def process_unbilled_accounts(opts={})
+        bfn = opts[:break_if]
         self.with_payable_debt.payment_attempt_ready.each do |acct|
+          break if bfn && bfn.call == true
           Rails.logger.info "#{Time.now.to_s} : Adding job for unbilled payable account."
           Job.run_later :billing, acct, :enter_payment!
         end
@@ -75,8 +77,8 @@ module QuickBilling
     ## INSTANCE METHODS
     
     # returns first active subscription
-    def active_subscription
-      self.active_subscriptions.first
+    def active_subscription(reload=false)
+      self.active_subscriptions(reload).first
     end
 
     def active_subscriptions(reload=false)

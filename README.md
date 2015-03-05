@@ -22,6 +22,7 @@ TODO: Write usage instructions here
 
 ## Later Features
 
+* More exception handling in all charging and payment methods
 * Order model for handling purchase orders. Invoice tied to order.
 * Allow Payments directly on Invoice, rather than just billing account (for one-time orders)
 * Prorating adjustments for Subscriptions
