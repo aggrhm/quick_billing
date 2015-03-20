@@ -203,6 +203,10 @@ module QuickBilling
       amt ||= self.update_balance   # ensure balance up to date
 
       return {success: false, error: 'Payment amount must be greater than $2.'} if amt <= 200
+
+      # check if customer has payment method
+      return {success: false, error: "Account must have valid payment method."} if !self.has_valid_payment_method?
+
       result = QuickBilling.Payment.send_payment!({account: self, payment_method: self.payment_methods[0], amount: amt})
       return result
     end

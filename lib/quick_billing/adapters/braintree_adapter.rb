@@ -44,7 +44,7 @@ module QuickBilling
           else
             return {success: false, error: 'Credit card could not be found.', orig: result}
           end
-        rescue Exception => e
+        rescue => e
             return {success: false, error: 'Credit card could not be found.', orig: result}
         end
       end

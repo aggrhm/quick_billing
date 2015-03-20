@@ -83,7 +83,7 @@ module QuickBilling
           else
             return {success: false, data: p, error: "Payment could not be entered"}
           end
-        rescue Exception => e
+        rescue => e
           p.state! :error
           p.status = e.message
           p.status << "\n" + e.backtrace.join("\n\t")
