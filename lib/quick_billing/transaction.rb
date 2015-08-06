@@ -27,6 +27,7 @@ module QuickBilling
           belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.Account.to_s
           belongs_to :payment, :foreign_key => :pid, :class_name => QuickBilling.Payment.to_s
           belongs_to :invoice, :foreign_key => :iid, :class_name => QuickBilling.Invoice.to_s
+          belongs_to :coupon, :foreign_key => :cid, :class_name => QuickBilling.Coupon.to_s
 
           enum_methods! :type, TYPES
           enum_methods! :state, STATES
@@ -44,6 +45,9 @@ module QuickBilling
           }
           scope :for_payment, lambda {|pid|
             where(pid: pid)
+          }
+          scope :for_coupon, lambda {|cid|
+            where(cid: cid)
           }
         end
       end
@@ -87,6 +91,15 @@ module QuickBilling
         return {success: success, data: t}
       end
 
+      def enter_redeemed_coupon!(acct, coupon, opts={})
+        if !coupon.transactionable?
+          return {success: false, error: "This coupon cannot be entered as a transaction."}
+        end
+        desc = "Coupon: #{coupon.title}"
+        result = self.enter_credit!(acct, coupon.amount, {description: desc, coupon: coupon})
+        return result
+      end
+
       def enter_credit!(acct, amt, opts={})
         success = false
         t = self.new
@@ -94,6 +107,7 @@ module QuickBilling
         t.description = opts[:description] || "Credit"
         t.amount = amt
         t.subscription = opts[:subscription] if opts[:subscription]
+        t.coupon = opts[:coupon] if opts[:coupon]
         t.state! :completed
         t.account = acct
         if t.save

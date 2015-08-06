@@ -265,12 +265,12 @@ module QuickBilling
       return {success: true, data: result[:data]}
     end
 
-    def finalize_invoice(inv)
+    def finalize_invoice(inv, opts={})
       inv.subscription = self
       inv.account = self.account
       inv.description = "Subscription Billing Invoice"
-      inv.period_start = self.period_start
-      inv.period_end = self.period_end
+      inv.period_start = opts[:period_start] || self.period_start
+      inv.period_end = opts[:period_end] || self.period_end
       return inv
     end
 
@@ -280,23 +280,27 @@ module QuickBilling
         return {success: false, error: "Cannot renew this subscripton because it has more time left."}
       end
 
+      # determine new period
+      if self.state?(:active)
+        # already active, just advance from previous period
+        p_st = self.period_end
+      else
+        p_st = Time.now
+      end
+      p_end = p_st + self.period_length
+
       entries = self.invoiceable_entries(true)
       # Ensure entries are valid
       result = self.update_entries!(entries)
       return result if !result[:success]
       inv = QuickBilling.Invoice.from_entries(result[:data])
-      self.finalize_invoice(inv)
+      self.finalize_invoice(inv, {period_start: p_st, period_end: p_end})
 
       begin
         resp = inv.charge_to_account!(self.account)
         if resp[:success]
-          if self.state?(:active)
-            # already active, just advance from previous period
-            self.period_start = self.period_end
-          else
-            self.period_start = Time.now
-          end
-          self.period_end = self.period_start + self.period_length
+          self.period_start = inv.period_start
+          self.period_end = inv.period_end
           self.last_invoice_id = inv.id
           self.last_invoiced_amount = inv.charged_amount
           self.state! :active

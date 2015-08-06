@@ -183,6 +183,7 @@ module QuickBilling
     def to_api(opt=:default)
       ret = {}
       ret[:id] = self.id.to_s
+      ret[:subscription_id] = self.sid ? self.sid.to_s : nil
       ret[:description] = self.description
       ret[:state] = self.state
       ret[:subtotal] = self.subtotal

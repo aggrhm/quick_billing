@@ -211,6 +211,18 @@ module QuickBilling
       return result
     end
 
+    def redeem_coupon!(coupon)
+      if !coupon.transactionable? || !coupon.redeemable_by_account?(self.id)
+        return {success: false, error: "This coupon is not valid."}
+      end
+      result = QuickBilling.Transaction.enter_redeemed_coupon!(self, coupon)
+      if result[:success]
+        return {success: true, data: coupon, transaction: result[:data]}
+      else
+        return {success: false, data: coupon, error: result[:error]}
+      end
+    end
+
     def update_platform_info
       return if self.customer_id.nil?
       cust = QuickBilling.platform.find_customer(self.customer_id)
@@ -227,7 +239,6 @@ module QuickBilling
         end
       end
     end
-
 
     def to_api(opt=:full)
       ret = {}
