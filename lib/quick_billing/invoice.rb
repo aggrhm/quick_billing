@@ -68,7 +68,7 @@ module QuickBilling
     def parse_entries(entries)
       @entries = []
       entries.each do |entry|
-        next if !entry.invoice_limit.nil? && entry.invoices_count >= entry.invoice_limit
+        next if !entry.invoiceable?(true)
         itm = entry.to_line_item
         self.items << itm
         @entries << entry

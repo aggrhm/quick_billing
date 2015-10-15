@@ -122,6 +122,7 @@ module QuickBilling
         e.percent = coupon.percent
         e.invoices_left = coupon.max_uses
         e.invoice_limit = coupon.max_uses
+        e.state! :valid
         return e
       end
 
@@ -134,6 +135,7 @@ module QuickBilling
         e.description = "#{product.name}"
         e.amount = product.price
         e.quantity = quantity
+        e.state! :valid
         return e
       end
 
@@ -147,14 +149,20 @@ module QuickBilling
       self.invoice_count(true) > 0
     end
 
+    def invoiceable?(reload=false)
+      return false if self.state?(:voided)
+      return true if self.invoice_limit.nil?
+      return self.invoice_count(reload) < self.invoice_limit
+    end
+
     def invoice_count(reload=false)
-      if reload
+      if reload || self.ic.nil?
         count = QuickBilling.Invoice.is_state(:charged).with_entry(self.id).count
         if !self.invoice_limit.nil?
           self.invoices_left = self.invoice_limit - count
         end
         self.ic = count
-        self.save
+        self.save_if_persisted
       end
       self.ic
     end
