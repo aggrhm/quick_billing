@@ -49,6 +49,16 @@ module QuickBilling
           scope :for_coupon, lambda {|cid|
             where(cid: cid)
           }
+          scope :type_is, lambda {|tp|
+            where('tp' => {'$in' => tp})
+          }
+          scope :before, lambda {|t|
+            where('c_at' => {'$lt' => t})
+          }
+          scope :on_or_after, lambda {|t|
+            where('c_at' => {'$gte' => t})
+          }
+          
         end
       end
 
