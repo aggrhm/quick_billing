@@ -175,7 +175,7 @@ module QuickBilling
 
     # HANDLERS
 
-    def handle_event(ev, opts)
+    def handle_event_locally(ev, opts)
       case ev
       when 'completed'
         Job.run_later :meta, self.account, :update_balance

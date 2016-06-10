@@ -373,12 +373,6 @@ module QuickBilling
       end
     end
 
-    def handle_activated
-    end
-    def handle_renewed
-    end
-    def handle_cancelled
-    end
 
     # API
 
