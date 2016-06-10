@@ -1,6 +1,7 @@
 module QuickBilling
 
   module Subscription
+    include QuickBilling::ModelBase
 
     STATES = {inactive: 1, active: 2, cancelled: 3, created: 4}
 
@@ -25,8 +26,8 @@ module QuickBilling
           field :ar, as: :is_autorenewable, type: Boolean, default: false
           field :pr, as: :is_prorateable, type: Boolean, default: false
 
-          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.Account.to_s
-          has_many :entries, :class_name => QuickBilling.Entry.to_s, :dependent => :destroy
+          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.classes[:account]
+          has_many :entries, :class_name => QuickBilling.classes[:entry], :dependent => :destroy
 
           mongoid_timestamps!
 
@@ -277,7 +278,7 @@ module QuickBilling
     def renew!(opts={})
       is_activating = !self.state?(:active)
       if self.state?(:active) && !self.expired?
-        return {success: false, error: "Cannot renew this subscripton because it has more time left."}
+        return {success: false, error: "Cannot renew this subscription because it has more time left."}
       end
 
       # determine new period
@@ -296,35 +297,35 @@ module QuickBilling
       inv = QuickBilling.Invoice.from_entries(result[:data])
       self.finalize_invoice(inv, {period_start: p_st, period_end: p_end})
 
-      begin
-        resp = inv.charge_to_account!(self.account)
-        if resp[:success]
-          self.period_start = inv.period_start
-          self.period_end = inv.period_end
-          self.last_invoice_id = inv.id
-          self.last_invoiced_amount = inv.charged_amount
-          self.state! :active
-          self.save
-          Job.run_later :billing, self, :handle_renewed
-          Job.run_later(:billing, self, :handle_activated) if is_activating
-          return {success: true, data: self, invoice: inv}
-        else
-          return {success: false, error: "Could not charge invoice for Subscription"}
-        end
-      rescue => ex
-        Rails.logger.info(ex.backtrace.join("\n\t")) if defined?(Rails)
-        inv.void!
-        #self.state! :inactive
+      resp = inv.charge_to_account!(self.account)
+      if resp[:success]
+        self.period_start = inv.period_start
+        self.period_end = inv.period_end
+        self.last_invoice_id = inv.id
+        self.last_invoiced_amount = inv.charged_amount
+        self.state! :active
         self.save
-        return {success: false, error: "An error occurred processing the invoice"}
+        self.report_event('renewed')
+        self.report_event('activated') if is_activating
+        return {success: true, data: self, invoice: inv}
+      else
+        self.report_event('error', action: 'renew', message: "Could not charge invoice.")
+        return {success: false, error: "Could not charge invoice for Subscription."}
       end
+    rescue => ex
+      Rails.logger.info(ex.backtrace.join("\n\t")) if defined?(Rails)
+      inv.void! if inv
+      #self.state! :inactive
+      self.save
+      self.report_event('error', action: 'renew', message: ex.message, backtrace: ex.backtrace)
+      return {success: false, error: "An error occurred processing the invoice."}
     end
 
     def cancel_at_end!
       return {success: false, error: "Subscription is not active"} if !self.state?(:active)
       self.is_autorenewable = false
       self.save
-      Job.run_later :billing, self, :handle_cancelled
+      self.report_event('cancelled')
       return {success: true}
     end
 
@@ -344,7 +345,7 @@ module QuickBilling
       self.save
 
       # update balance
-      Job.run_later :billing, self, :handle_cancelled
+      self.report_event('cancelled')
       return {success: true}
     end
 

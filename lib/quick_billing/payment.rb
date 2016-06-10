@@ -1,6 +1,7 @@
 module QuickBilling
 
   module Payment
+    include QuickBilling::ModelBase
     STATES = {entered: 1, processing: 2, completed: 3, void: 4, error: 5}
 
     def self.included(base)
@@ -21,7 +22,7 @@ module QuickBilling
           field :ds, as: :description, type: String
           field :sa, as: :status, type: String
 
-          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.Account.to_s
+          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.classes[:account]
 
           mongoid_timestamps!
 
@@ -110,8 +111,8 @@ module QuickBilling
         self.token = result[:id]
         self.status = result[:error]
         self.save
-        Job.run_later :billing, self, :handle_attempted
-        Job.run_later :billing, self, :handle_error
+        self.report_event('attempted')
+        self.report_event('error', action: 'process_payment', message: result[:error])
         return {success: false, error: result[:error]}
       end
 
@@ -119,8 +120,8 @@ module QuickBilling
         self.state! :completed
         self.token = result[:id]
         self.save
-        Job.run_later :billing, self, :handle_attempted
-        Job.run_later :billing, self, :handle_completed
+        self.report_event('attempted')
+        self.report_event('completed')
 
         # enter transaction
         result = QuickBilling.Transaction.enter_completed_payment!(self)
@@ -129,21 +130,14 @@ module QuickBilling
         else
           return {success: false, error: result[:error]}
         end
-      rescue
+      rescue => ex
         QuickBilling.platform.void_payment(result[:id])
         self.state! :error
         self.token = result[:id]
         self.save
-        Job.run_later :billing, self, :handle_error
+        self.report_event('error', action: 'process_payment', message: ex.message, backtrace: ex.backtrace)
         return {success: false, error: "An error occurred processing this payment"}
       end
-    end
-
-    def handle_attempted
-    end
-    def handle_completed
-    end
-    def handle_error
     end
 
     def to_api(opt=:full)

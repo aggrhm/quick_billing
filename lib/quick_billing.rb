@@ -1,5 +1,6 @@
 require "money"
 require "quick_billing/version"
+require "quick_billing/model_base"
 require "quick_billing/account"
 require "quick_billing/payment"
 require "quick_billing/product"
@@ -76,13 +77,13 @@ module QuickBilling
     end
   end
 
+  def self.classes
+    return @options[:classes]
+  end
+
   def self.models
     @models ||= begin
-      ret = {}
-      @options[:classes].each do |k,v|
-        ret[k.to_sym] = v.constantize
-      end
-      ret
+      ModelMap.new(@options[:classes])
     end
   end
 
@@ -175,5 +176,21 @@ module QuickBilling
     end
 
   end
+
+  ## MODELMATP
+  class ModelMap
+
+    def initialize(classes)
+      @classes = classes
+    end
+
+    def [](val)
+      val = val.to_sym
+      return @classes[val].constantize
+    end
+
+  end
+
+  
 
 end

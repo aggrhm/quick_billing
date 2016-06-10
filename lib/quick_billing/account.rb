@@ -11,6 +11,7 @@ module QuickBilling
   # }
 
   module Account
+    include QuickBilling::ModelBase
 
     STATES = {paid: 1, delinquent: 2}
 

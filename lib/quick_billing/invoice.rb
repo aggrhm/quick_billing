@@ -5,6 +5,7 @@ module QuickBilling
   # 2. Discounts (percent or amount)
   # 3. Taxes and Fees (not applicable to discounts)
   module Invoice
+    include QuickBilling::ModelBase
 
     STATES = {open: 1, charged: 2, paid: 3, voided: 4}
 
@@ -37,8 +38,8 @@ module QuickBilling
           field :its, as: :items, type: Array, default: []
           field :ca, as: :charged_amount, type: Integer
 
-          belongs_to :subscription, foreign_key: :sid, class_name: QuickBilling.Subscription.to_s
-          belongs_to :account, foreign_key: :aid, class_name: QuickBilling.Account.to_s
+          belongs_to :subscription, foreign_key: :sid, class_name: QuickBilling.classes[:subscription]
+          belongs_to :account, foreign_key: :aid, class_name: QuickBilling.classes[:account]
 
           mongoid_timestamps!
 
@@ -152,7 +153,8 @@ module QuickBilling
         self.state! :charged
         self.charged_amount = ttl
         self.save
-        Job.run_later :billing, self, :handle_charged
+        Job.run_later :billing, self, :update_invoice_stats_for_entries
+        self.report_event('charged')
       end
       return res
     end
@@ -165,6 +167,7 @@ module QuickBilling
       end
       self.state! :voided
       self.save
+      self.report_event('voided')
       return {success: true}
     end
 
@@ -174,10 +177,6 @@ module QuickBilling
         next if entry.nil?
         entry.invoice_count(true)
       end
-    end
-
-    def handle_charged
-      Job.run_later :billing, self, :update_invoice_stats_for_entries
     end
 
     def to_api(opt=:default)

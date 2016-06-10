@@ -6,6 +6,7 @@ module QuickBilling
   # assigned to it are still invoiceable and create a new invoice with them, remembering to
   # decrement the invoices_left attribute.
   module Entry
+    include QuickBilling::ModelBase
 
     SOURCES = {discount: 1, tax: 2, prorate: 3, product: 4}
     SOURCES_SORT_ORDER = [4, 3, 1, 2]
@@ -31,11 +32,11 @@ module QuickBilling
           field :qn, as: :quantity, type: Integer, default: 1
           field :mth, as: :meta, type: Hash, default: {}
 
-          belongs_to :subscription, foreign_key: :sid, class_name: QuickBilling.Subscription.to_s
-          belongs_to :account, foreign_key: :aid, class_name: QuickBilling.Account.to_s
+          belongs_to :subscription, foreign_key: :sid, class_name: QuickBilling.classes[:subscription]
+          belongs_to :account, foreign_key: :aid, class_name: QuickBilling.classes[:account]
 
-          belongs_to :coupon, foreign_key: :cid, class_name: QuickBilling.Coupon.to_s
-          belongs_to :product, foreign_key: :pid, class_name: QuickBilling.Product.to_s
+          belongs_to :coupon, foreign_key: :cid, class_name: QuickBilling.classes[:coupon]
+          belongs_to :product, foreign_key: :pid, class_name: QuickBilling.classes[:product]
 
           attr_alias :coupon_id, :cid
           attr_alias :product_id, :pid

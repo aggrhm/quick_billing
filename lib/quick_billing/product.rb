@@ -1,6 +1,7 @@
 module QuickBilling
 
   module Product
+    include QuickBilling::ModelBase
 
     def self.included(base)
       base.extend ClassMethods

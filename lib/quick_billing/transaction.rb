@@ -1,6 +1,7 @@
 module QuickBilling
 
   module Transaction
+    include QuickBilling::ModelBase
 
     TYPES = {charge: 1, payment: 2, credit: 3, refund: 4}
     STATES = {entered: 1, processing: 2, completed: 3, void: 4, error: 5}
@@ -23,11 +24,11 @@ module QuickBilling
           field :mth, as: :meta, type: Hash, default: Hash.new
           field :sa, as: :status, type: String
 
-          belongs_to :subscription, :foreign_key => :sid, :class_name => QuickBilling.Subscription.to_s
-          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.Account.to_s
-          belongs_to :payment, :foreign_key => :pid, :class_name => QuickBilling.Payment.to_s
-          belongs_to :invoice, :foreign_key => :iid, :class_name => QuickBilling.Invoice.to_s
-          belongs_to :coupon, :foreign_key => :cid, :class_name => QuickBilling.Coupon.to_s
+          belongs_to :subscription, :foreign_key => :sid, :class_name => QuickBilling.classes[:subscription]
+          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.classes[:account]
+          belongs_to :payment, :foreign_key => :pid, :class_name => QuickBilling.classes[:payment]
+          belongs_to :invoice, :foreign_key => :iid, :class_name => QuickBilling.classes[:invoice]
+          belongs_to :coupon, :foreign_key => :cid, :class_name => QuickBilling.classes[:coupon]
 
           enum_methods! :type, TYPES
           enum_methods! :state, STATES
@@ -74,7 +75,7 @@ module QuickBilling
         success = t.save
         if success
           t.account.modify_balance! amt
-          Job.run_later :billing, t, :handle_completed
+          self.report_event('completed')
         end
         return {success: success, data: t}
       end
@@ -95,7 +96,7 @@ module QuickBilling
         success = t.save
         if success
           t.account.modify_balance! -t.amount
-          Job.run_later :billing, t, :handle_completed
+          self.report_event('completed')
         end
 
         return {success: success, data: t}
@@ -123,7 +124,7 @@ module QuickBilling
         if t.save
           success = true
           acct.modify_balance! -amt
-          Job.run_later :billing, t, :handle_completed
+          self.report_event('completed')
         end
 
         return {success: success, data: t}
@@ -140,7 +141,7 @@ module QuickBilling
         if t.save
           success = true
           acct.modify_balance! amt
-          Job.run_later :billing, t, :handle_completed
+          self.report_event('completed')
         end
 
         return {success: success, data: t}
@@ -168,22 +169,19 @@ module QuickBilling
     def void!
       self.state! :void
       self.save
-      Job.run_later :billing, self, :handle_voided
+      self.report_event('voided')
       return true
     end
 
     # HANDLERS
 
-    def handle_completed
-      Job.run_later :meta, self.account, :update_balance
-    end
-
-    def handle_error
-
-    end
-
-    def handle_voided
-      Job.run_later :meta, self.account, :update_balance
+    def handle_event(ev, opts)
+      case ev
+      when 'completed'
+        Job.run_later :meta, self.account, :update_balance
+      when 'voided'
+        Job.run_later :meta, self.account, :update_balance
+      end
     end
 
     def to_api(opt=:full)

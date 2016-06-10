@@ -1,6 +1,7 @@
 module QuickBilling
 
   module Coupon
+    include QuickBilling::ModelBase
 
     STYLES = {subscription: 1, invoice: 1, account: 2}
     STATES = {active: 1, inactive: 2}
