@@ -110,9 +110,9 @@ module QuickBilling
       return self.balance_overdue_at < Time.now
     end
 
-    def admin_users
-      # override this method with users authorized for this account
-
+    def customer_info
+      # override this method with a hash of customer info
+      return {}
     end
 
     def has_valid_payment_method?
@@ -127,8 +127,7 @@ module QuickBilling
 
     def ensure_customer_id!
       return self.customer_id unless self.customer_id.blank?
-      admin = self.admin_users.first
-      result = QuickBilling.platform.create_customer({id: self.id.to_s, email: admin.email})
+      result = QuickBilling.platform.create_customer(self.customer_info.merge({id: self.id.to_s}))
       if result[:success]
         self.customer_id = result[:id]
         self.platform = QuickBilling.options[:platform]

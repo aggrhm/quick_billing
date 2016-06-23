@@ -130,7 +130,7 @@ module QuickBilling
 
   class PaymentMethod
 
-    attr_accessor :platform, :customer_id, :type, :token, :number, :expiration_date, :card_type
+    attr_accessor :platform, :customer_id, :type, :token, :number, :expiration_date, :card_type, :last_4
 
     def self.from_braintree_credit_card(card)
       pm = PaymentMethod.new(
@@ -139,6 +139,7 @@ module QuickBilling
         type: QuickBilling::PAYMENT_TYPES[:credit_card],
         token: card.token,
         number: card.masked_number,
+        last_4: card.last_4,
         expiration_date: card.expiration_date,
         card_type: card.card_type
       )
@@ -147,8 +148,12 @@ module QuickBilling
 
     def initialize(opts={})
       opts.each do |key, val|
-        self.send("#{key}=", val) if self.respond_to? key
+        self.send("#{key}=", val) if self.respond_to?("#{key}=")
       end
+    end
+
+    def id
+      self.token
     end
 
     def [](field)
@@ -163,9 +168,11 @@ module QuickBilling
       {
         "platform" => self.platform,
         "customer_id" => self.customer_id,
+        "id" => self.id,
         "type" => self.type,
         "token" => self.token,
         "number" => self.number,
+        "last_4" => self.last_4,
         "expiration_date" => self.expiration_date,
         "card_type" => self.card_type
       }
