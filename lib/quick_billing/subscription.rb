@@ -1,7 +1,6 @@
 module QuickBilling
 
   module Subscription
-    include QuickBilling::ModelBase
 
     STATES = {inactive: 1, active: 2, cancelled: 3, created: 4}
 
@@ -11,38 +10,43 @@ module QuickBilling
 
     module ClassMethods
 
-      def quick_billing_subscription_keys_for(db)
-        if db == :mongoid
-          include MongoHelper::Model
+      def quick_billing_subscription!
+        include QuickBilling::ModelBase
+        include QuickScript::Model
 
-          field :st, as: :state, type: Integer
-          field :st_at, as: :state_changed_at, type: Time
-          field :pi, as: :period_interval, type: Integer, default: 1   # period in months
-          field :pu, as: :period_unit, type: String, default: 'month'   # period in months
-          field :p_st, as: :period_start, type: Time
-          field :p_end, as: :period_end, type: Time
-          field :li_id, as: :last_invoice_id
-          field :la, as: :last_invoiced_amount, type: Integer
-          field :ar, as: :is_autorenewable, type: Boolean, default: false
-          field :pr, as: :is_prorateable, type: Boolean, default: false
+        if self.respond_to?(:field)
+          field :state, type: Integer
+          field :state_changed_at, type: Time
+          field :period_interval, type: Integer, default: 1   # period in months
+          field :period_unit, type: String, default: 'month'   # period in months
+          field :period_start, type: Time
+          field :period_end, type: Time
+          field :last_invoice_id, type: Integer
+          field :last_invoiced_amount, type: Integer
+          field :is_autorenewable, type: :boolean, default: false
+          field :is_prorateable, type: :boolean, default: false
 
-          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.classes[:account]
-          has_many :entries, :class_name => QuickBilling.classes[:entry], :dependent => :destroy
+          field :account_id, type: Integer
 
-          mongoid_timestamps!
+          timestamps!
 
-          enum_methods! :state, STATES
 
-          scope :active, lambda {
-            where(st: STATES[:active])
-          }
-          scope :expired, lambda {
-            where(:p_end => {'$lt' => Time.now})
-          }
-          scope :for_account, lambda {|aid|
-            where(aid: aid)
-          }
         end
+
+        belongs_to :account, :class_name => QuickBilling.classes[:account]
+        has_many :entries, :class_name => QuickBilling.classes[:entry], :dependent => :destroy
+
+        enum_methods! :state, STATES
+
+        scope :active, lambda {
+          where(state: STATES[:active])
+        }
+        scope :expired, lambda {
+          where("period_end < ?", Time.now)
+        }
+        scope :for_account, lambda {|aid|
+          where(account_id: aid)
+        }
 
       end
 
@@ -379,13 +383,13 @@ module QuickBilling
     def to_api(opt=:default)
       ret = {}
       ret[:id] = self.id.to_s
+      ret[:state] = self.state
       ret[:period_start] = self.period_start.to_i
       ret[:period_end] = self.period_end.to_i
       ret[:is_autorenewable] = self.is_autorenewable
       ret[:last_invoice_id] = self.last_invoice_id.to_s
       ret[:entries] = self.invoiceable_entries.collect{|e| e.to_api}
       ret[:last_invoiced_amount] = self.last_invoiced_amount
-      ret[:state] = self.state
       return ret
     end
 

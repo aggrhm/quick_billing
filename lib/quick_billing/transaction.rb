@@ -12,55 +12,62 @@ module QuickBilling
 
     module ClassMethods
 
-      def quick_billing_transaction_keys_for(db)
-        if db == :mongoid
-          include MongoHelper::Model
+      def quick_billing_transaction!
+        include QuickBilling::ModelBase
+        include QuickScript::Model
 
-          field :tp, as: :type, type: Integer
-          field :ds, as: :description, type: String
-          field :am, as: :amount, type: Integer
-          field :st, as: :state, type: Integer
-          field :st_at, as: :state_changed_at, type: Time
-          field :mth, as: :meta, type: Hash, default: Hash.new
-          field :sa, as: :status, type: String
+        if self.respond_to?(:field)
+          field :type, type: Integer
+          field :description, type: String
+          field :amount, type: Integer
+          field :state, type: Integer
+          field :state_changed_at, type: Time
+          field :status, type: String
+          field :meta, type: Hash, default: Hash.new
 
-          belongs_to :subscription, :foreign_key => :sid, :class_name => QuickBilling.classes[:subscription]
-          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.classes[:account]
-          belongs_to :payment, :foreign_key => :pid, :class_name => QuickBilling.classes[:payment]
-          belongs_to :invoice, :foreign_key => :iid, :class_name => QuickBilling.classes[:invoice]
-          belongs_to :coupon, :foreign_key => :cid, :class_name => QuickBilling.classes[:coupon]
+          field :subscription_id, type: Integer
+          field :account_id, type: Integer
+          field :payment_id, type: Integer
+          field :invoice_id, type: Integer
+          field :coupon_id, type: Integer
 
-          enum_methods! :type, TYPES
-          enum_methods! :state, STATES
-
-          mongoid_timestamps!
-
-          scope :completed, lambda {
-            where(st: STATES[:completed])
-          }
-          scope :for_account, lambda {|acct_id|
-            where(aid: acct_id).desc(:created_at)
-          }
-          scope :for_invoice, lambda {|inv_id|
-            where(iid: inv_id)
-          }
-          scope :for_payment, lambda {|pid|
-            where(pid: pid)
-          }
-          scope :for_coupon, lambda {|cid|
-            where(cid: cid)
-          }
-          scope :type_is, lambda {|tp|
-            where('tp' => {'$in' => tp})
-          }
-          scope :before, lambda {|t|
-            where('c_at' => {'$lt' => t})
-          }
-          scope :on_or_after, lambda {|t|
-            where('c_at' => {'$gte' => t})
-          }
-          
+          timestamps!
         end
+
+        belongs_to :subscription, :class_name => QuickBilling.classes[:subscription]
+        belongs_to :account, :class_name => QuickBilling.classes[:account]
+        belongs_to :payment, :class_name => QuickBilling.classes[:payment]
+        belongs_to :invoice, :class_name => QuickBilling.classes[:invoice]
+        belongs_to :coupon, :class_name => QuickBilling.classes[:coupon]
+
+        enum_methods! :type, TYPES
+        enum_methods! :state, STATES
+
+        scope :completed, lambda {
+          where(state: STATES[:completed])
+        }
+        scope :for_account, lambda {|acct_id|
+          where(account_id: acct_id).desc(:created_at)
+        }
+        scope :for_invoice, lambda {|inv_id|
+          where(invoice_id: inv_id)
+        }
+        scope :for_payment, lambda {|pid|
+          where(payment_id: pid)
+        }
+        scope :for_coupon, lambda {|cid|
+          where(coupon_id: cid)
+        }
+        scope :has_type, lambda {|tp|
+          where(type: tp)
+        }
+        scope :before, lambda {|t|
+          where("created_at < ?", t)
+        }
+        scope :on_or_after, lambda {|t|
+          where("created_at >= ?", t)
+        }
+        
       end
 
       def enter_charge!(acct, amt, opts)

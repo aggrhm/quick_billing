@@ -1,7 +1,6 @@
 module QuickBilling
 
   module Payment
-    include QuickBilling::ModelBase
     STATES = {entered: 1, processing: 2, completed: 3, void: 4, error: 5}
 
     def self.included(base)
@@ -10,59 +9,42 @@ module QuickBilling
 
     module ClassMethods
 
-      def quick_billing_payment_keys_for(db)
-        if db == :mongoid
-          include MongoHelper::Model
+      def quick_billing_payment!
+        include QuickBilling::ModelBase
+        include QuickScript::Model
+        if self.respond_to?(:field)
+          field :token, type: String
+          field :state, type: Integer
+          field :state_changed_at, type: Time
+          field :payment_method_data, type: Hash
+          field :amount, type: Integer
+          field :description, type: String
+          field :status, type: String
 
-          field :tk, as: :token, type: String
-          field :st, as: :state, type: Integer
-          field :st_at, as: :state_changed_at, type: Time
-          field :pm, type: Hash
-          field :am, as: :amount, type: Integer
-          field :ds, as: :description, type: String
-          field :sa, as: :status, type: String
+          field :account_id, type: Integer
 
-          belongs_to :account, :foreign_key => :aid, :class_name => QuickBilling.classes[:account]
-
-          mongoid_timestamps!
-
-          enum_methods! :state, STATES
-
-          define_method :payment_method do
-            self.pm.nil? ? nil : QuickBilling::PaymentMethod.new(self.pm)
-          end
-
-          define_method :payment_method= do |val|
-            if val.nil?
-              self.pm = nil
-            elsif val.is_a? QuickBilling::PaymentMethod
-              self.pm = val.to_hash
-            elsif val.is_a? Hash
-              self.pm = val
-            else
-              raise "Cannot convert #{val.class.to_s} to mongo"
-            end
-          end
-
+          timestamps!
         end
 
+        belongs_to :account, :class_name => QuickBilling.classes[:account]
+        enum_methods! :state, STATES
+
         scope :for_account, lambda {|aid|
-          where(aid: aid)
+          where(account_id: aid)
         }
-
         scope :pending, lambda {
-          where(:st => {'$in' => [STATES[:entered], STATES[:processing]]})
+          where(:st => [STATES[:entered], STATES[:processing]])
         }
-
         scope :with_error, lambda {
           where(:st => STATE[:error])
         }
-
       end
 
       def send_payment!(opts)
         acct = opts[:account]
-        payment_method = opts[:payment_method]
+        pm_id = opts[:payment_method_id]
+        pm = PaymentMethod.find(pm_id)
+        return {success: false, error: "Payment method not found."} if pm.nil?
         amt = opts[:amount]
         return {success: false, error: "Cannot charge non-positive amount."} if amt < 0
 
@@ -72,7 +54,7 @@ module QuickBilling
           p.state! :entered
           p.amount = amt
           p.account = acct
-          p.payment_method = payment_method
+          p.payment_method_data = pm.to_api.stringify_keys
           # TODO: if payment doesn't clear immediately, enter transaction as processing and lookup later when transaction completes. If transaction errors, make processing transaction void and update balance
           if p.save
             res = p.process_payment!
@@ -99,11 +81,10 @@ module QuickBilling
 
     def process_payment!
       acct = self.account
-      pm = self.payment_method
 
       result = QuickBilling.platform.send_payment(
         amount: self.amount,
-        payment_method: pm
+        payment_method: self.payment_method_data["token"]
       )
 
       if !result[:success]
@@ -143,10 +124,10 @@ module QuickBilling
     def to_api(opt=:full)
       ret = {}
       ret[:id] = self.id.to_s
+      ret[:state] = self.state
       ret[:amount] = self.amount
       ret[:created_at] = self.created_at.to_i
-      ret[:payment_method] = self.payment_method.nil? ? nil : self.payment_method.to_api
-      ret[:state] = self.state
+      ret[:payment_method_data] = self.payment_method_data
       return ret
     end
 

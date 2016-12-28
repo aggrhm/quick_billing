@@ -1,7 +1,6 @@
 module QuickBilling
 
   module Product
-    include QuickBilling::ModelBase
 
     def self.included(base)
       base.extend ClassMethods
@@ -9,28 +8,29 @@ module QuickBilling
 
     module ClassMethods
 
-      def quick_billing_product_keys_for(db)
-        if db == :mongoid
-          include MongoHelper::Model
+      def quick_billing_product!
+        include QuickBilling::ModelBase
+        include QuickScript::Model
 
-          field :nm, as: :name, type: String
-          field :ky, as: :key, type: String
-          field :pr, as: :price, type: Integer
-          field :pi, as: :period_interval, type: Integer, default: 1   # period in months
-          field :pu, as: :period_unit, type: String, default: 'month'   # period in months
-          field :av, as: :is_available, type: Boolean, default: true
-          field :pb, as: :is_public, type: Boolean, default: true
-          field :mrh, as: :metrics, type: Hash, default: Hash.new
+        if self.respond_to?(:field)
+          field :name, type: String
+          field :key, type: String
+          field :price, type: Integer
+          field :period_interval, type: Integer
+          field :period_unit, type: String
+          field :is_available, type: :boolean, default: true
+          field :is_public, type: :boolean, default: true
+          field :metrics, type: Hash, default: Hash.new
 
-          mongoid_timestamps!
-
-          scope :available, lambda {
-            where(av: true)
-          }
-          scope :is_public, lambda {
-            where(pb: true)
-          }
+          timestamps!
         end
+
+        scope :available, lambda {
+          where(is_available: true)
+        }
+        scope :is_public, lambda {
+          where(is_public: true)
+        }
       end
 
       def add_product!(key, name, price)
@@ -50,7 +50,7 @@ module QuickBilling
       end
 
       def find_with_key(key)
-        self.where(ky: key).first
+        self.where(key: key).first
       end
 
     end

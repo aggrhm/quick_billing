@@ -27,38 +27,36 @@ module QuickBilling
 
     module ClassMethods
 
-      def quick_billing_invoice_keys_for(db)
-        if db == :mongoid
-          include MongoHelper::Model
+      def quick_billing_invoice!
+        include QuickScript::Model
+        if self.respond_to?(:field)
+          field :description, type: String
+          field :state, type: Integer
+          field :period_start, type: Time
+          field :period_end, type: Time
+          field :charged_amount, type: Integer
 
-          field :ds, as: :description, type: String
-          field :st, as: :state, type: Integer
-          field :p_st, as: :period_start, type: Time
-          field :p_end, as: :period_end, type: Time
-          field :its, as: :items, type: Array, default: []
-          field :ca, as: :charged_amount, type: Integer
+          field :subscription_id, type: Integer
+          field :account_id, type: Integer
 
-          belongs_to :subscription, foreign_key: :sid, class_name: QuickBilling.classes[:subscription]
-          belongs_to :account, foreign_key: :aid, class_name: QuickBilling.classes[:account]
-
-          mongoid_timestamps!
-
-          enum_methods! :state, STATES
-
-          scope :with_entry, lambda {|eid|
-            where("its.entry_id" => eid)
-          }
-          scope :is_state, lambda {|st|
-            where(st: STATES[st.to_sym])
-          }
-
+          timestamps!
         end
+
+        belongs_to :subscription, class_name: QuickBilling.classes[:subscription]
+        belongs_to :account, class_name: QuickBilling.classes[:account]
+        has_many :entries, foreign_key: :invoice_id, class_name: QuickBilling.classes[:entry]
+
+        enum_methods! :state, STATES
+
+        scope :with_state, lambda {|st|
+          where(st: STATES[st.to_sym])
+        }
       end
 
-      def from_entries(entries)
+      def from_entries
         inv = self.new
         inv.state! :open
-        inv.parse_entries(entries)
+        inv.parse_entries
         return inv
       end
 
@@ -66,7 +64,8 @@ module QuickBilling
 
     ## INSTANCE METHODS
 
-    def parse_entries(entries)
+    def parse_entries
+      raise "Needs refactoring"
       @entries = []
       entries.each do |entry|
         next if !entry.invoiceable?(true)
@@ -78,16 +77,8 @@ module QuickBilling
       self.items
     end
 
-    def entries(reload=false)
-      eids = self.items.collect{|i| i['entry_id']}
-      if reload || @entries.nil?
-        @entries = QuickBilling.Entry.find(eids).select{|e| !e.nil?}
-      end
-      @entries.sort_by {|e| Entry::SOURCES_SORT_ORDER.index(e.source) || 100 }
-    end
-
     def ordered_items
-      self.items.sort_by {|i| Entry::SOURCES_SORT_ORDER.index(i['source']) || 100 }
+      self.entries.sort_by {|e| Entry::SOURCES_SORT_ORDER.index(e.source) || 100 }
     end
 
     def charged_transaction
@@ -106,20 +97,16 @@ module QuickBilling
     def calculate_totals
       # sum only line items
       sum = 0
-      self.items.select{|itm| itm["source"] != Entry::SOURCES[:discount] && itm["source"] != Entry::SOURCES[:tax]}.each do |itm|
-        itm["total"] = (itm["quantity"] || 0) * (itm["amount"] || 0)
-        sum += itm["total"]
+      self.entries.select{|e| e.source != Entry::SOURCES[:discount] && e.source != Entry::SOURCES[:tax]}.each do |e|
+        sum += e.total_amount
       end
       @subtotal = sum
 
       # add discounts
       sub = @subtotal
       sum = 0
-      self.items.select{|itm| itm["source"] == Entry::SOURCES[:discount]}.each do |itm|
-        amt = itm["amount"] || 0
-        per = itm["percent"] ? ( (itm["percent"] / 100.0) * sub ) : 0
-        itm["total"] = (amt + per).round(2)
-        sum += itm["total"]
+      self.entries.select{|e| e.source == Entry::SOURCES[:discount]}.each do |e|
+        sum += e.total_amount(sub)
       end
       @discount_total = sum
       # don't let discount be greater than subtotal
@@ -128,11 +115,8 @@ module QuickBilling
       # then taxes
       sub = @discount_total
       sum = 0
-      self.items.select{|itm| itm["source"] == Entry::SOURCES[:tax]}.each do |itm|
-        amt = itm["amount"] || 0
-        per = itm["percent"] ? ( (itm["percent"] / 100.0) * sub ) : 0
-        itm["total"] = (amt + per).round(2)
-        sum += itm["total"]
+      self.entries.select{|e| e.source == Entry::SOURCES[:tax]}.each do |itm|
+        sum += e.total_amount(sub)
       end
       @tax_total = sum
 
@@ -182,26 +166,19 @@ module QuickBilling
     def to_api(opt=:default)
       ret = {}
       ret[:id] = self.id.to_s
-      ret[:subscription_id] = self.sid ? self.sid.to_s : nil
+      ret[:subscription_id] = self.subscription_id ? self.subscription_id.to_s : nil
       ret[:description] = self.description
       ret[:state] = self.state
       ret[:subtotal] = self.subtotal
       ret[:total] = self.total
-      ret[:items] = self.ordered_items
+      ret[:entries] = self.ordered_entries
       ret[:created_at] = self.created_at.to_i
       ret[:period_start] = self.period_start.to_i
       ret[:period_end] = self.period_end.to_i
-      if opt==:full_with_entries
-        ret[:entries] = self.entries.collect{|e| e.to_api}
-      end
+
       return ret
     end
 
-
-  end
-
-  class InvoiceItem
-    attr_accessor :amount, :description, :adjustment_id
 
   end
 

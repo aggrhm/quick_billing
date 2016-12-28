@@ -16,6 +16,9 @@ module QuickBilling
 
   PAYMENT_PLATFORMS = {paypal: 1, braintree: 2}
   PAYMENT_TYPES = {credit_card: 1}
+  ERROR_CODES = {
+    resource_not_found: 1000
+  }
 
   ## CONFIGURATION
 
@@ -110,6 +113,14 @@ module QuickBilling
   end
   def self.Invoice
     self.models[:invoice]
+  end
+
+  def self.orm_for_model(model)
+    if model < ActiveRecord::Base
+      return :active_record
+    elsif model.respond_to?(:mongo_session)
+      return :mongoid
+    end
   end
 
   ## HELPERS

@@ -5,15 +5,14 @@ module QuickBilling
 	#   customer_id : <id of customer on billing platform>
 	#   customer_pms : <array of payment methods>
 	#   platform : <platform enum of customer>
-	#   state : <paid, delinquent>
+	#   balance_state : <paid, delinquent>
 	#   balance : <balance of account after transactions>
 	#   balance_overdue_at : <date balance is overdue, account is delinquent> 
   # }
 
   module Account
-    include QuickBilling::ModelBase
 
-    STATES = {paid: 1, delinquent: 2}
+    BALANCE_STATES = {paid: 1, delinquent: 2}
 
     def self.included(base)
       base.extend ClassMethods
@@ -21,48 +20,35 @@ module QuickBilling
 
     module ClassMethods
 
-      def quick_billing_account_keys_for(db)
-        if db == :mongoid
-          include MongoHelper::Model
-          field :cid, as: :customer_id, type: String
-          field :pms, type: Array, default: []
-          field :pf, as: :platform, type: String
-          field :bl, as: :balance, type: Integer, default: 0
-          field :bo_at, as: :balance_overdue_at, type: Time
-          field :pa_at, as: :last_payment_attempted_at, type: Time
-          field :mth, as: :meta, type: Hash, default: Hash.new
-
-          scope :with_debt, lambda {
-            where('bl' => {'$gt' => 0})
-          }
-          scope :with_payable_debt, lambda {
-            where('bl' => {'$gt' => 200})
-          }
-          scope :payment_attempt_ready, lambda {
-            where('$or' => [{'pa_at' => {'$lt' => 1.day.ago}}, {'pa_at' => nil}])
-          }
-          scope :with_overdue_balance, lambda {
-            where('bo_at' => {'$lt' => Time.now})
-          }
-
-          define_method :payment_methods do
-            self.pms.collect{|pm| QuickBilling::PaymentMethod.new(pm)}
-          end
-
-          define_method :payment_methods= do |val|
-            self.pms = val.collect{|pm|
-              if pm.is_a? QuickBilling::PaymentMethod
-                pm.to_hash
-              elsif pm.is_a? Hash
-                pm
-              else
-                raise "Cannot parse #{pm.class.to_s} to mongo PaymentMethod"
-              end
-            }
-          end
-
+      def quick_billing_account!
+        include QuickBilling::ModelBase
+        include QuickScript::Model
+        if self.respond_to?(:field)
+          field :customer_id, type: String
+          field :platform, type: String
+          field :balance, type: Integer, default: 0
+          field :balance_overdue_at, type: Time
+          field :last_payment_attempted_at, type: Time
+          field :meta, type: Hash, default: Hash.new
+          timestamps!
         end
+
+        has_many :payment_methods, foreign_key: :account_id, class_name: QuickBilling.classes[:payment_method]
+
+        scope :with_debt, lambda {
+          where("balance > 0")
+        }
+        scope :with_payable_debt, lambda {
+          where("balance > 200")
+        }
+        scope :payment_attempt_ready, lambda {
+          where("last_payment_attempted_at is null or last_payment_attempted_at < ?", 1.day.ago)
+        }
+        scope :with_overdue_balance, lambda {
+          where("balance_overdue_at < ?", Time.now)
+        }
       end
+
 
       def process_unbilled_accounts(opts={})
         bfn = opts[:break_if]
@@ -91,19 +77,19 @@ module QuickBilling
 
     # ACCESSORS
 
-    def state
+    def balance_state
       if self.balance > 200 && self.is_balance_overdue?
-        return STATES[:delinquent]
+        return BALANCE_STATES[:delinquent]
       else
-        return STATES[:paid]
+        return BALANCE_STATES[:paid]
       end
     end
 
     def is_paid?
-      return self.state == STATES[:paid]
+      return self.balance_state == BALANCE_STATES[:paid]
     end
     def is_delinquent?
-      return self.state == STATES[:delinquent]
+      return self.balance_state == BALANCE_STATES[:delinquent]
     end
     def is_balance_overdue?
       return false if self.balance_overdue_at.nil?
@@ -244,7 +230,7 @@ module QuickBilling
       ret = {}
       ret[:id] = self.id.to_s
       ret[:balance] = self.balance
-      ret[:state] = self.state
+      ret[:balance_state] = self.balance_state
       ret[:balance_overdue_at] = self.balance_overdue_at.to_i unless self.balance_overdue_at.nil?
       ret[:payment_methods] = self.payment_methods.collect(&:to_api)
       ret[:active_subscription_ids] = self.active_subscriptions.collect{|s| s.id.to_s}

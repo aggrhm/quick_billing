@@ -13,71 +13,77 @@ module QuickBilling
     STATES = {valid: 1, voided: 2}
 
     def self.included(base)
+      base.send :include, QuickBilling::ModelBase
       base.extend ClassMethods
     end
 
     module ClassMethods
 
-      def quick_billing_entry_keys_for(db)
-        if db == :mongoid
-          include MongoHelper::Model
-          field :ds, as: :description, type: String
-          field :st, as: :state, type: Integer, default: 1
-          field :sr, as: :source, type: Integer
-          field :am, as: :amount, type: Integer
-          field :pr, as: :percent, type: Integer
-          field :il, as: :invoices_left, type: Integer
-          field :ic, type: Integer, default: 0    # invoice count
-          field :im, as: :invoice_limit, type: Integer
-          field :qn, as: :quantity, type: Integer, default: 1
-          field :mth, as: :meta, type: Hash, default: {}
+      def quick_billing_entry!
+        include QuickScript::Model
+        if self.respond_to?(:field)
+          field :description, type: String
+          field :state, type: Integer, default: 1
+          field :source, type: Integer
+          field :amount, type: Integer
+          field :percent, type: Integer
+          field :invoices_left, type: Integer
+          field :invoice_count, type: Integer, default: 0    # invoice count
+          field :invoice_limit, type: Integer
+          field :quantity, type: Integer, default: 1
+          field :meta, type: Hash, default: {}
 
-          belongs_to :subscription, foreign_key: :sid, class_name: QuickBilling.classes[:subscription]
-          belongs_to :account, foreign_key: :aid, class_name: QuickBilling.classes[:account]
+          field :subscription_id, type: Integer
+          belongs_to :subscription, class_name: QuickBilling.classes[:subscription]
 
-          belongs_to :coupon, foreign_key: :cid, class_name: QuickBilling.classes[:coupon]
-          belongs_to :product, foreign_key: :pid, class_name: QuickBilling.classes[:product]
+          field :account_id, type: Integer
+          belongs_to :account, class_name: QuickBilling.classes[:account]
 
-          attr_alias :coupon_id, :cid
-          attr_alias :product_id, :pid
+          field :coupon_id, type: Integer
+          belongs_to :coupon, class_name: QuickBilling.classes[:coupon]
+
+          field :product_id, type: Integer
+          belongs_to :product, class_name: QuickBilling.classes[:product]
+
+          timestamps!
 
           enum_methods! :source, SOURCES
           enum_methods! :state, STATES
-        end
 
-        scope :for_coupon, lambda {|cid|
-          where(cid: cid)
-        }
-        scope :for_product, lambda {|pid|
-          where(pid: pid)
-        }
-        scope :for_account, lambda {|aid|
-          where(aid: aid)
-        }
-        scope :for_subscription, lambda {|sid|
-          where(sid: sid)
-        }
-        scope :is_discount, lambda {
-          where(sr: SOURCES[:discount])
-        }
-        scope :is_tax, lambda {
-          where(sr: SOURCES[:tax])
-        }
-        scope :is_prorate, lambda {
-          where(sr: SOURCES[:prorate])
-        }
-        scope :is_product, lambda {
-          where(sr: SOURCES[:product])
-        }
-        scope :is_valid, lambda {
-          where('st' => {'$ne' => 2})
-        }
-        scope :invoiceable, lambda {
-          is_valid.where('$or' => [{il: nil}, {'il' => {'$exists' => false}}, {'il' => {'$gt' => 0}}])
-        }
-        scope :invoiced, lambda {
-          where(:ic => {'$gt' => 0})
-        }
+          scope :for_coupon, lambda {|cid|
+            where(coupon_id: cid)
+          }
+          scope :for_product, lambda {|pid|
+            where(product_id: pid)
+          }
+          scope :for_account, lambda {|aid|
+            where(account_id: aid)
+          }
+          scope :for_subscription, lambda {|sid|
+            where(subscription_id: sid)
+          }
+          scope :is_discount, lambda {
+            where(source: SOURCES[:discount])
+          }
+          scope :is_tax, lambda {
+            where(source: SOURCES[:tax])
+          }
+          scope :is_prorate, lambda {
+            where(source: SOURCES[:prorate])
+          }
+          scope :is_product, lambda {
+            where(source: SOURCES[:product])
+          }
+          scope :is_valid, lambda {
+            where("state != 2")
+          }
+          scope :invoiceable, lambda {
+            is_valid.where("invoices_left is null OR invoices_left > 0")
+          }
+          scope :invoiced, lambda {
+            where("invoice_count > 0")
+          }
+        end
 
         validate do
           errors.add(:amount, "Must specify an amount or a percent") if self.amount.nil? && self.percent.nil?
@@ -158,14 +164,16 @@ module QuickBilling
 
     def invoice_count(reload=false)
       if reload || self.ic.nil?
-        count = QuickBilling.Invoice.is_state(:charged).with_entry(self.id).count
+        # TODO: Need to look up Entries linked to this one that have invoice_id
+        raise "Needs fixing"
+        #count = QuickBilling.Invoice.is_state(:charged).with_entry(self.id).count
         if !self.invoice_limit.nil?
           self.invoices_left = self.invoice_limit - count
         end
-        self.ic = count
+        self[:invoice_count] = count
         self.save_if_persisted
       end
-      self.ic
+      self[:invoice_count]
     end
 
     def save_if_persisted
@@ -186,6 +194,15 @@ module QuickBilling
         return a
       end
 
+    end
+
+    def total_amount(ref=nil)
+      if self.percent.present?
+        ret = (ref * (self.percent / 100.0)).round(2)
+      else
+        ret = 0
+      end
+      return ret + self.amount * self.quantity
     end
 
     def adjustment_str

@@ -1,40 +1,39 @@
 module QuickBilling
 
   module Coupon
-    include QuickBilling::ModelBase
 
     STYLES = {subscription: 1, invoice: 1, account: 2}
     STATES = {active: 1, inactive: 2}
 
     def self.included(base)
+      base.send :include, QuickBilling::ModelBase
       base.extend ClassMethods
     end
 
     module ClassMethods
 
-      def quick_billing_coupon_keys_for(db)
-        if db == :mongoid
-          include MongoHelper::Model
-          field :sy, as: :style, type: Integer
-          field :tl, as: :title, type: String
-          field :cd, as: :code, type: String
-          field :st, as: :state, type: Integer
-          field :am, as: :amount, type: Integer
-          field :pr, as: :percent, type: Integer
-          field :mr, as: :max_redemptions, type: Integer
-          field :mu, as: :max_uses, type: Integer
-          field :sc, as: :source, type: String
-          field :mth, as: :meta, type: Hash, default: {}
-
-          mongoid_timestamps!
+      def quick_billing_coupon!
+        include QuickScript::Model
+        if self.respond_to?(:field)
+          field :style, type: Integer
+          field :title, type: String
+          field :code, type: String
+          field :state, type: Integer
+          field :amount, type: Integer
+          field :percent, type: Integer
+          field :max_redemptions, type: Integer
+          field :max_uses, type: Integer
+          field :source, type: String
+          field :meta, type: Hash, default: Hash.new
+          timestamps!
         end
+
+        scope :with_source, lambda {|src|
+          where(source: src)
+        }
 
         enum_methods! :state, STATES
         enum_methods! :style, STYLES
-
-        scope :with_source, lambda {|src|
-          where(sc: src)
-        }
 
         validate do
           self.errors.add(:style, "Style cannot be blank.") if self.style.blank?
@@ -45,7 +44,7 @@ module QuickBilling
       end
 
       def find_with_code(code)
-        where(cd: code.strip).first || find(code)
+        where(code: code.strip).first || find(code)
       end
 
       def generate_code(len=8)
