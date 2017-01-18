@@ -47,6 +47,9 @@ module QuickBilling
         scope :with_overdue_balance, lambda {
           where("balance_overdue_at < ?", Time.now)
         }
+
+        before_destroy :delete_customer!
+
       end
 
 
@@ -119,7 +122,7 @@ module QuickBilling
         self.platform = QuickBilling.options[:platform]
         self.save
       else
-        raise "Could not create customer!"
+        return false
       end
       return self.customer_id
     end
@@ -226,14 +229,23 @@ module QuickBilling
       end
     end
 
+    def delete_customer!
+      if customer_id.present?
+        res = QuickBilling.platform.delete_customer(customer_id: customer_id)
+        return res[:success]
+      else
+        return true
+      end
+    end
+
     def to_api(opt=:full)
       ret = {}
       ret[:id] = self.id.to_s
       ret[:balance] = self.balance
       ret[:balance_state] = self.balance_state
       ret[:balance_overdue_at] = self.balance_overdue_at.to_i unless self.balance_overdue_at.nil?
-      ret[:payment_methods] = self.payment_methods.collect(&:to_api)
-      ret[:active_subscription_ids] = self.active_subscriptions.collect{|s| s.id.to_s}
+      #ret[:payment_methods] = self.payment_methods.collect(&:to_api)
+      #ret[:active_subscription_ids] = self.active_subscriptions.collect{|s| s.id.to_s}
       return ret
     end
 

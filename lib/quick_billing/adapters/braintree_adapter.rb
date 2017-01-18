@@ -14,6 +14,11 @@ module QuickBilling
         end
       end
 
+      def self.delete_customer(opts)
+        result = Braintree::Customer.delete(opts[:customer_id])
+        return {success: result.success?, orig: result}
+      end
+
       ## ACCOUNTS
 
       def self.save_payment_method(opts)
