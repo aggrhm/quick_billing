@@ -23,15 +23,23 @@ module QuickBilling
       def quick_billing_account!
         include QuickBilling::ModelBase
         include QuickScript::Model
+        include QuickJobs::Processable
+
         if self.respond_to?(:field)
           field :customer_id, type: String
           field :platform, type: String
           field :balance, type: Integer, default: 0
           field :balance_overdue_at, type: Time
           field :last_payment_attempted_at, type: Time
+          field :needs_balancing, type: :boolean, default: false
+
           field :meta, type: Hash, default: Hash.new
+
+          field :default_payment_method_id, type: Integer
           timestamps!
         end
+
+        processable!
 
         has_many :payment_methods, foreign_key: :account_id, class_name: QuickBilling.classes[:payment_method]
 
@@ -39,7 +47,7 @@ module QuickBilling
           where("balance > 0")
         }
         scope :with_payable_debt, lambda {
-          where("balance > 200")
+          where(needs_balancing: false).where("balance > 200")
         }
         scope :payment_attempt_ready, lambda {
           where("last_payment_attempted_at is null or last_payment_attempted_at < ?", 1.day.ago)
@@ -47,24 +55,55 @@ module QuickBilling
         scope :with_overdue_balance, lambda {
           where("balance_overdue_at < ?", Time.now)
         }
+        scope :needs_balancing, lambda {
+          where(needs_balancing: true)
+        }
 
         before_destroy :delete_customer!
 
       end
 
-
       def process_unbilled_accounts(opts={})
         bfn = opts[:break_if]
-        self.with_payable_debt.payment_attempt_ready.each do |acct|
+        self.process_each!(with_payable_debt.payment_attempt_ready, id: 'process_unbilled_accounts') do |acct|
           break if bfn && bfn.call == true
-          Rails.logger.info "#{Time.now.to_s} : Adding job for unbilled payable account."
-          Job.run_later :billing, acct, :enter_payment!
+          Rails.logger.info "Processing unbilled payable account."
+          acct.enter_payment!
+        end
+      end
+
+      def process_unbalanced_accounts(opts={})
+        self.process_each!(needs_balancing, id: 'process_unbalanced_accounts') do |acct|
+          acct.update_balance
         end
       end
 
     end
 
     ## INSTANCE METHODS
+
+    def update_as_action!(opts)
+      new_record = self.new_record?
+
+      report_event 'updating', raise_exceptions: true
+
+      success = self.save
+      error = self.error_message
+      if success
+        if new_record
+          if self.ensure_customer_id! == false
+            raise "Could not setup customer id"
+          end
+        end
+        report_event 'updated'
+      end
+    rescue => ex
+      success = false
+      error = ex.message
+      self.destroy if new_record && persisted?
+    ensure
+      return {success: success, data: self, error: error, new_record: new_record}
+    end
     
     # returns first active subscription
     def active_subscription(reload=false)
@@ -109,7 +148,17 @@ module QuickBilling
     end
 
     def credit_cards
-      self.payment_methods.select{|pm| pm.type?(:credit_card) }
+      self.payment_methods.select{|pm| pm.payment_type?(:credit_card) }
+    end
+
+    def default_payment_method
+      if self.default_payment_method_id.present?
+        pm = QuickBilling.PaymentMethod.find(self.default_payment_method_id)
+      end
+      if pm.nil?
+        pm = self.payment_methods.first
+      end
+      return pm
     end
 
     # ACTIONS
@@ -127,36 +176,15 @@ module QuickBilling
       return self.customer_id
     end
 
-    def save_payment_method(opts)
-      opts[:customer_id] = self.ensure_customer_id!
-      result = QuickBilling.platform.save_payment_method(opts)
-      self.update_payment_methods
-      return result
-    end
-
-    def delete_payment_method(opts)
-      result = QuickBilling.platform.delete_payment_method(token: opts[:token])
-      self.update_payment_methods
-      return result
-    end
-
-    def update_payment_methods
-      result = QuickBilling.platform.list_payment_methods(self.ensure_customer_id!)
-      if result[:success]
-        self.payment_methods = result[:data]
-        self.save
-      end
-    end
-
     def update_balance
       # iterate all transactions
       old_bal = self.balance
 
       new_bal = 0
       QuickBilling.Transaction.completed.for_account(self.id).each do |tr|
-        if tr.type?(:charge) || tr.type?(:refund)
+        if tr.primary_type?(:charge) || tr.primary_type?(:refund)
           new_bal += tr.amount
-        elsif tr.type?(:payment) || tr.type?(:credit)
+        elsif tr.primary_type?(:payment) || tr.primary_type?(:credit)
           new_bal -= tr.amount
         end
       end
@@ -171,18 +199,19 @@ module QuickBilling
       end
 
       self.balance = new_bal
+      self.needs_balancing = false
 
       self.save
       return self.balance
     end
 
+    def needs_balancing!
+      self.update_attribute :needs_balancing, true
+    end
+
     def modify_balance!(amt)
-      mv = Mongoid::VERSION.to_i
-      if mv < 4
-        self.inc(:bl, amt)
-      else
-        self.inc(bl: amt)
-      end
+      nb = self.balance + amt
+      self.update_attribute :balance, nb
     end
 
     def enter_payment!(amt = nil)
@@ -196,7 +225,7 @@ module QuickBilling
       # check if customer has payment method
       return {success: false, error: "Account must have valid payment method."} if !self.has_valid_payment_method?
 
-      result = QuickBilling.Payment.send_payment!({account: self, payment_method: self.payment_methods[0], amount: amt})
+      result = QuickBilling.Transaction.enter_payment!(account: self, payment_method: self.default_payment_method, amount: amt)
       return result
     end
 
@@ -219,14 +248,6 @@ module QuickBilling
         self.customer_id = nil
       end
       self.update_payment_methods
-    end
-
-    def ensure_payment_transactions
-      QuickBilling.Payment.for_account(self.id).each do |payment|
-        if QuickBilling.Transaction.for_payment(payment.id).count == 0
-          QuickBilling.Transaction.enter_completed_payment!(payment)
-        end
-      end
     end
 
     def delete_customer!

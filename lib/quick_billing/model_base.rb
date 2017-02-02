@@ -6,7 +6,9 @@ module QuickBilling
       self.handle_event_internally(ev, opts)
       self.handle_event(ev, opts)
     rescue => ex
-      if defined?(Rails)
+      if opts[:raise_exception]
+        raise
+      elsif defined?(Rails)
         Rails.logger.info(ex.message)
         Rails.logger.info(ex.backtrace.join("\n\t"))
       end

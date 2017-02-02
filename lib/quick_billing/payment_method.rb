@@ -28,7 +28,12 @@ module QuickBilling
 
         belongs_to :account, class_name: QuickBilling.classes[:account]
 
+        enum_methods! :payment_type, QuickBilling::PAYMENT_TYPES
+
         scope :for_account, lambda {|aid|
+          where(account_id: aid)
+        }
+        scope :with_account_id, lambda {|aid|
           where(account_id: aid)
         }
         scope :with_token, lambda {|t|
@@ -54,14 +59,15 @@ module QuickBilling
       end
       acct = QuickBilling.Account.find(opts[:account_id])
       self.account = acct
-      opts[:customer_id] = self.ensure_customer_id!
+      opts[:customer_id] = acct.customer_id
       res = QuickBilling.platform.save_payment_method(opts)
       pm = res[:data]
       token = res[:token]
       success = res[:success]
       error = res[:error]
+      pf = res[:platform]
       if success
-        self.from_platform_payment_method(pm)
+        self.from_platform_payment_method(pf, pm)
         success = self.save
         error = self.error_message if !success
       end
@@ -72,7 +78,7 @@ module QuickBilling
         QuickBilling.platform.delete_payment_method(token: token)
         self.destroy
       end
-      return {success: false, data: self, error: "An unexpected error occurred", new_record: true}
+      return {success: false, data: self, error: "An error occurred updating your payment method. Please try again.", new_record: true}
     end
 
     def delete_as_action!(opts)
@@ -90,8 +96,8 @@ module QuickBilling
       return {success: success, data: self, error: error}
     end
 
-    def from_platform_payment_method(pm)
-      if pm.is_a?(Braintree::PaymentMethod)
+    def from_platform_payment_method(platform, pm)
+      if platform == QuickBilling::PAYMENT_PLATFORMS[:braintree]
         from_braintree_payment_method(pm)
       else
         raise "Payment method unknown"
@@ -107,6 +113,20 @@ module QuickBilling
       self.last_4 = pm.last_4
       self.expiration_date = pm.expiration_date
       self.card_type = pm.card_type
+    end
+
+    def to_api(opt=:full)
+      ret = {}
+      ret[:id] = self.id.to_s
+      ret[:account_id] = self.account_id.to_s
+      ret[:platform] = self.platform
+      ret[:payment_type] = self.payment_type
+      ret[:masked_number] = self.masked_number
+      ret[:last_4] = self.last_4
+      ret[:expiration_date] = self.expiration_date
+      ret[:card_type] = self.card_type
+      ret[:created_at] = self.created_at.to_i
+      return ret
     end
 
   end

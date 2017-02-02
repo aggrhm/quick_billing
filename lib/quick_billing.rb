@@ -2,7 +2,7 @@ require "money"
 require "quick_billing/version"
 require "quick_billing/model_base"
 require "quick_billing/account"
-require "quick_billing/payment"
+require "quick_billing/payment_method"
 require "quick_billing/product"
 require "quick_billing/transaction"
 require "quick_billing/subscription"
@@ -53,8 +53,8 @@ module QuickBilling
     @options[:classes] = (@options[:classes] || {}).with_indifferent_access
     mm = @options[:class_module] || ""
     @options[:classes][:account] ||= "#{mm}::Account"
+    @options[:classes][:payment_method] ||= "#{mm}::PaymentMethod"
     @options[:classes][:transaction] ||= "#{mm}::Transaction"
-    @options[:classes][:payment] ||= "#{mm}::Payment"
     @options[:classes][:subscription] ||= "#{mm}::Subscription"
     @options[:classes][:product] ||= "#{mm}::Product"
     @options[:classes][:entry] ||= "#{mm}::Entry"
@@ -96,9 +96,6 @@ module QuickBilling
   def self.Transaction
     self.models[:transaction]
   end
-  def self.Payment
-    self.models[:payment]
-  end
   def self.Product
     self.models[:product]
   end
@@ -113,6 +110,9 @@ module QuickBilling
   end
   def self.Invoice
     self.models[:invoice]
+  end
+  def self.PaymentMethod
+    self.models[:payment_method]
   end
 
   def self.orm_for_model(model)
@@ -137,65 +137,7 @@ module QuickBilling
 
   end
 
-  ## CLASSES
-
-  class PaymentMethod
-
-    attr_accessor :platform, :customer_id, :type, :token, :number, :expiration_date, :card_type, :last_4
-
-    def self.from_braintree_credit_card(card)
-      pm = PaymentMethod.new(
-        platform: :braintree,
-        customer_id: card.customer_id,
-        type: QuickBilling::PAYMENT_TYPES[:credit_card],
-        token: card.token,
-        number: card.masked_number,
-        last_4: card.last_4,
-        expiration_date: card.expiration_date,
-        card_type: card.card_type
-      )
-      return pm
-    end
-
-    def initialize(opts={})
-      opts.each do |key, val|
-        self.send("#{key}=", val) if self.respond_to?("#{key}=")
-      end
-    end
-
-    def id
-      self.token
-    end
-
-    def [](field)
-      return self.send(field.to_s)
-    end
-
-    def type?(val)
-      self.type == QuickBilling::PAYMENT_TYPES[val.to_sym]
-    end
-
-    def to_hash
-      {
-        "platform" => self.platform,
-        "customer_id" => self.customer_id,
-        "id" => self.id,
-        "type" => self.type,
-        "token" => self.token,
-        "number" => self.number,
-        "last_4" => self.last_4,
-        "expiration_date" => self.expiration_date,
-        "card_type" => self.card_type
-      }
-    end
-
-    def to_api
-      self.to_hash.symbolize_keys
-    end
-
-  end
-
-  ## MODELMATP
+  ## MODELMAP
   class ModelMap
 
     def initialize(classes)

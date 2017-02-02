@@ -3,7 +3,7 @@ module QuickBilling
   module Transaction
     include QuickBilling::ModelBase
 
-    TYPES = {charge: 1, payment: 2, credit: 3, refund: 4}
+    PRIMARY_TYPES = {charge: 1, payment: 2, credit: 3, refund: 4}
     STATES = {entered: 1, processing: 2, completed: 3, void: 4, error: 5}
 
     def self.included(base)
@@ -17,17 +17,19 @@ module QuickBilling
         include QuickScript::Model
 
         if self.respond_to?(:field)
-          field :type, type: Integer
+          field :primary_type, type: Integer
           field :description, type: String
           field :amount, type: Integer
           field :state, type: Integer
           field :state_changed_at, type: Time
           field :status, type: String
+          field :ref_id, type: String
+          field :payment_method_data, type: Hash
+
           field :meta, type: Hash, default: Hash.new
 
           field :subscription_id, type: Integer
           field :account_id, type: Integer
-          field :payment_id, type: Integer
           field :invoice_id, type: Integer
           field :coupon_id, type: Integer
 
@@ -36,18 +38,20 @@ module QuickBilling
 
         belongs_to :subscription, :class_name => QuickBilling.classes[:subscription]
         belongs_to :account, :class_name => QuickBilling.classes[:account]
-        belongs_to :payment, :class_name => QuickBilling.classes[:payment]
         belongs_to :invoice, :class_name => QuickBilling.classes[:invoice]
         belongs_to :coupon, :class_name => QuickBilling.classes[:coupon]
 
-        enum_methods! :type, TYPES
+        enum_methods! :primary_type, PRIMARY_TYPES
         enum_methods! :state, STATES
 
         scope :completed, lambda {
           where(state: STATES[:completed])
         }
         scope :for_account, lambda {|acct_id|
-          where(account_id: acct_id).desc(:created_at)
+          where(account_id: acct_id)
+        }
+        scope :with_account_id, lambda {|acct_id|
+          where(account_id: acct_id)
         }
         scope :for_invoice, lambda {|inv_id|
           where(invoice_id: inv_id)
@@ -58,8 +62,8 @@ module QuickBilling
         scope :for_coupon, lambda {|cid|
           where(coupon_id: cid)
         }
-        scope :has_type, lambda {|tp|
-          where(type: tp)
+        scope :has_primary_type, lambda {|tp|
+          where(primary_type: tp)
         }
         scope :before, lambda {|t|
           where("created_at < ?", t)
@@ -67,13 +71,22 @@ module QuickBilling
         scope :on_or_after, lambda {|t|
           where("created_at >= ?", t)
         }
+
+        attr_accessor :payment_method
+
+        validate do
+          errors.add(:primary_type, "Needs primary type.") if self.primary_type.blank?
+          errors.add(:state, "Needs state.") if self.state.blank?
+          errors.add(:ref_id, "Needs ref id.") if self.primary_type?(:payment) || self.primary_type?(:refund)
+          errors.add(:amount, "Needs amount.") if self.amount.blank?
+        end
         
       end
 
-      def enter_charge!(acct, amt, opts)
+      def enter_charge!(acct, amt, opts={})
         t = self.new
-        t.type! :charge
-        t.description = opts[:description]
+        t.primary_type! :charge
+        t.description = opts[:description] || "Charge"
         t.amount = amt
         t.state!(opts[:state] || :completed)
         t.account = acct
@@ -82,28 +95,29 @@ module QuickBilling
         success = t.save
         if success
           t.account.modify_balance! amt
-          self.report_event('completed')
+          t.report_event('completed')
         end
         return {success: success, data: t}
       end
 
-      def enter_completed_payment!(payment, opts={})
-        if !self.for_payment(payment.id).first.nil?
-          return {success: false, error: "Transaction already completed for payment"}
-        end
-
-        success = false
+      def enter_payment!(opts)
+        acct = opts[:account]
+        pm = opts[:payment_method]
+        return {success: false, error: "Payment method not found."} if pm.nil?
+        amt = opts[:amount]
+        return {success: false, error: "Cannot charge non-positive amount."} if amt < 0
         t = self.new
-        t.type! :payment
-        t.description = "Payment"
-        t.payment = payment
-        t.amount = payment.amount
-        t.state! :completed
-        t.account = payment.account
-        success = t.save
+        t.primary_type! :payment
+        t.description = opts[:description] || "Payment"
+        t.amount = amt
+        t.state! :entered
+        t.account = acct
+        t.payment_method = pm
+        t.payment_method_data = pm.to_api
+        success = t.process_payment!
         if success
           t.account.modify_balance! -t.amount
-          self.report_event('completed')
+          t.report_event('completed')
         end
 
         return {success: success, data: t}
@@ -121,7 +135,7 @@ module QuickBilling
       def enter_credit!(acct, amt, opts={})
         success = false
         t = self.new
-        t.type! :credit
+        t.primary_type! :credit
         t.description = opts[:description] || "Credit"
         t.amount = amt
         t.subscription = opts[:subscription] if opts[:subscription]
@@ -131,7 +145,7 @@ module QuickBilling
         if t.save
           success = true
           acct.modify_balance! -amt
-          self.report_event('completed')
+          t.report_event('completed')
         end
 
         return {success: success, data: t}
@@ -140,7 +154,7 @@ module QuickBilling
       def enter_manual_refund!(acct, amt, opts={})
         success = false
         t = self.new
-        t.type! :refund
+        t.primary_type! :refund
         t.description = opts[:description] || "Manual Refund"
         t.amount = amt
         t.state! :completed
@@ -148,7 +162,7 @@ module QuickBilling
         if t.save
           success = true
           acct.modify_balance! amt
-          self.report_event('completed')
+          t.report_event('completed')
         end
 
         return {success: success, data: t}
@@ -167,8 +181,8 @@ module QuickBilling
 
     # ACCESSORS
 
-    def type_str
-      TYPES.invert[self.type].to_s
+    def primary_type_str
+      PRIMARY_TYPES.invert[self.primary_type].to_s
     end
 
     # ACTIONS
@@ -180,28 +194,60 @@ module QuickBilling
       return true
     end
 
+    def process_payment!
+      rid = nil
+      success = true
+      error = nil
+      res = QuickBilling.platform.send_payment(
+        amount: self.amount,
+        payment_method_token: self.payment_method.token
+      )
+      self.ref_id = res[:id]
+      if !res[:success]
+        error = res[:error]
+        raise error
+      end
+      self.state! :completed
+      self.save(validate: false)
+
+      report_event('completed')
+
+    rescue => ex
+      success = false
+      error ||= "An unexpected error occurred processing this payment."
+      QuickBilling.platform.void_payment(self.ref_id) if self.ref_id.present?
+      QuickScript.log_exception(ex)
+      self.state! :error
+      self.status = error
+      self.save(validate: false)
+      report_event('error', action: 'process_payment', message: ex.message, backtrace: ex.backtrace)
+
+    ensure
+      return success
+    end
+
     # HANDLERS
 
-    def handle_event_locally(ev, opts)
+    def handle_event_internally(ev, opts)
       case ev
       when 'completed'
-        Job.run_later :meta, self.account, :update_balance
+        self.account.needs_balancing!
       when 'voided'
-        Job.run_later :meta, self.account, :update_balance
+        self.account.needs_balancing!
       end
     end
 
     def to_api(opt=:full)
       ret = {}
-
       ret[:id] = self.id.to_s
-      ret[:type] = self.type
+      ret[:primary_type] = self.primary_type
       ret[:description] = self.description
       ret[:amount] = self.amount
       ret[:state] = self.state
+      ret[:status] = self.status
       ret[:created_at] = self.created_at.to_i
-      ret[:invoice_id] = self.iid.to_s
-
+      ret[:invoice_id] = self.invoice_id.to_s if self.invoice_id.present?
+      ret[:payment_method_data] = self.payment_method_data if self.payment_method_data.present?
       return ret
     end
 

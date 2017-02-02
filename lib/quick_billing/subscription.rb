@@ -13,6 +13,7 @@ module QuickBilling
       def quick_billing_subscription!
         include QuickBilling::ModelBase
         include QuickScript::Model
+        include QuickJobs::Processable
 
         if self.respond_to?(:field)
           field :state, type: Integer
@@ -30,8 +31,9 @@ module QuickBilling
 
           timestamps!
 
-
         end
+
+        processable!
 
         belongs_to :account, :class_name => QuickBilling.classes[:account]
         has_many :entries, :class_name => QuickBilling.classes[:entry], :dependent => :destroy
@@ -94,9 +96,9 @@ module QuickBilling
           break if bfn && bfn.call == true
           Rails.logger.info "#{Time.now.to_s} : Adding job for expired subscription."
           if sub.is_autorenewable == true
-            Job.run_later :billing, sub, :renew!
+            sub.renew!
           else
-            Job.run_later :billing, sub, :cancel!
+            sub.cancel!
           end
         end
       end

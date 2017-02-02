@@ -33,7 +33,7 @@ module QuickBilling
           result = Braintree::PaymentMethod.update(req[:token], req)
         end
         if result.success?
-          return {success: true, data: result.payment_method, token: result.payment_method.token, orig: result}
+          return {success: true, data: result.payment_method, token: result.payment_method.token, orig: result, platform: QuickBilling::PAYMENT_PLATFORMS[:braintree]}
         else
           return {success: false, data: result.payment_method, error: result.message}
         end

@@ -8,9 +8,10 @@ module QuickBilling
   module Entry
     include QuickBilling::ModelBase
 
-    SOURCES = {discount: 1, tax: 2, prorate: 3, product: 4}
-    SOURCES_SORT_ORDER = [4, 3, 1, 2]
+    SOURCES = {discount: 1, tax: 2, prorate: 3, product: 4, general: 5}
+    SOURCES_SORT_ORDER = [4, 5, 3, 1, 2]
     STATES = {valid: 1, voided: 2}
+    CONTEXTS = {invoice: 1, account: 2, subscription: 3}
 
     def self.included(base)
       base.send :include, QuickBilling::ModelBase
@@ -24,70 +25,79 @@ module QuickBilling
         if self.respond_to?(:field)
           field :description, type: String
           field :state, type: Integer, default: 1
+          field :context, type: Integer
           field :source, type: Integer
           field :amount, type: Integer
           field :percent, type: Integer
-          field :invoices_left, type: Integer
+          field :invoices_left, type: Integer, default: 0
           field :invoice_count, type: Integer, default: 0    # invoice count
-          field :invoice_limit, type: Integer
+          field :invoice_limit, type: Integer, default: 1
           field :quantity, type: Integer, default: 1
           field :meta, type: Hash, default: {}
 
           field :subscription_id, type: Integer
-          belongs_to :subscription, class_name: QuickBilling.classes[:subscription]
-
           field :account_id, type: Integer
-          belongs_to :account, class_name: QuickBilling.classes[:account]
-
           field :coupon_id, type: Integer
-          belongs_to :coupon, class_name: QuickBilling.classes[:coupon]
-
           field :product_id, type: Integer
-          belongs_to :product, class_name: QuickBilling.classes[:product]
-
+          field :invoice_id, type: Integer
+          field :entry_id, type: Integer
           timestamps!
 
-          enum_methods! :source, SOURCES
-          enum_methods! :state, STATES
-
-          scope :for_coupon, lambda {|cid|
-            where(coupon_id: cid)
-          }
-          scope :for_product, lambda {|pid|
-            where(product_id: pid)
-          }
-          scope :for_account, lambda {|aid|
-            where(account_id: aid)
-          }
-          scope :for_subscription, lambda {|sid|
-            where(subscription_id: sid)
-          }
-          scope :is_discount, lambda {
-            where(source: SOURCES[:discount])
-          }
-          scope :is_tax, lambda {
-            where(source: SOURCES[:tax])
-          }
-          scope :is_prorate, lambda {
-            where(source: SOURCES[:prorate])
-          }
-          scope :is_product, lambda {
-            where(source: SOURCES[:product])
-          }
-          scope :is_valid, lambda {
-            where("state != 2")
-          }
-          scope :invoiceable, lambda {
-            is_valid.where("invoices_left is null OR invoices_left > 0")
-          }
-          scope :invoiced, lambda {
-            where("invoice_count > 0")
-          }
         end
 
+        belongs_to :subscription, class_name: QuickBilling.classes[:subscription]
+        belongs_to :account, class_name: QuickBilling.classes[:account]
+        belongs_to :coupon, class_name: QuickBilling.classes[:coupon]
+        belongs_to :product, class_name: QuickBilling.classes[:product]
+        belongs_to :invoice, class_name: QuickBilling.classes[:invoice]
+        belongs_to :entry, class_name: QuickBilling.classes[:entry]
+
+
+        enum_methods! :source, SOURCES
+        enum_methods! :state, STATES
+        enum_methods! :context, CONTEXTS
+
+        scope :for_coupon, lambda {|cid|
+          where(coupon_id: cid)
+        }
+        scope :for_product, lambda {|pid|
+          where(product_id: pid)
+        }
+        scope :for_account, lambda {|aid|
+          where(account_id: aid)
+        }
+        scope :for_subscription, lambda {|sid|
+          where(subscription_id: sid)
+        }
+        scope :is_discount, lambda {
+          where(source: SOURCES[:discount])
+        }
+        scope :is_tax, lambda {
+          where(source: SOURCES[:tax])
+        }
+        scope :is_prorate, lambda {
+          where(source: SOURCES[:prorate])
+        }
+        scope :is_product, lambda {
+          where(source: SOURCES[:product])
+        }
+        scope :is_valid, lambda {
+          where("state != 2")
+        }
+        scope :invoiceable, lambda {
+          is_valid.where("invoices_left is null OR invoices_left > 0")
+        }
+        scope :invoiced, lambda {
+          where("invoice_count > 0")
+        }
+
         validate do
-          errors.add(:amount, "Must specify an amount or a percent") if self.amount.nil? && self.percent.nil?
-          errors.add(:quantity, "Quantity must be greater than 0") if self.quantity <= 0
+          errors.add(:amount, "Must specify an amount or a percent.") if self.amount.nil? && self.percent.nil?
+          errors.add(:quantity, "Quantity must be greater than 0.") if self.quantity <= 0
+          errors.add(:context, "Entry context must be set.") if self.context.blank?
+          errors.add(:description, "Entry description must be set.") if self.description.blank?
+          errors.add(:state, "Entry state must be set.") if self.state.blank?
+          errors.add(:source, "Entry source must be set.") if self.source.blank?
         end
 
       end
@@ -146,6 +156,30 @@ module QuickBilling
         return e
       end
 
+    end
+
+    def update_as_action!(opts)
+      new_record = self.new_record?
+      if new_record
+        self.state! :valid
+        self.source! :general
+        self.account = opts[:account] if opts.key?(:account)
+        self.invoice = opts[:invoice] if opts.key?(:invoice)
+        self.context = opts[:context] if opts.key?(:context)
+        self.source = opts[:source] if opts.key?(:source)
+      end
+
+      self.description = opts[:description] if opts.key?(:description)
+      self.period_start = opts[:period_start] if opts.key?(:period_start)
+      self.period_end = opts[:period_end] if opts.key?(:period_end)
+      self.quantity = opts[:quantity].to_i if opts.key?(:quantity)
+      self.amount = opts[:amount].to_i if opts.key?(:amount)
+      self.meta.merge!(opts[:meta]) if opts.key?(:meta)
+
+      success = self.save
+      error = self.error_message
+
+      return {success: success, data: self, error: error, new_record: new_record}
     end
 
     def usable?
@@ -216,27 +250,6 @@ module QuickBilling
       end
     end
 
-    def to_line_item
-      ret = {}
-      ret['id'] = self.id.to_s
-      ret['entry_id'] = self.id.to_s
-      ret['source'] = self.source
-      ret['description'] = self.description
-      ret['amount'] = self.amount
-      ret['percent'] = self.percent
-      ret['quantity'] = self.quantity
-      ret['adjustment_str'] = self.adjustment_str
-      ret['invoice_limit'] = self.invoice_limit
-      ret['meta'] = self.meta
-      if !self.product.nil?
-        ret['product'] = self.product.to_api.stringify_keys
-      end
-      if !self.coupon.nil?
-        ret['coupon'] = self.coupon.to_api.stringify_keys
-      end
-      return ret
-    end
-
     def to_api(opt=:default)
       ret = {}
       ret[:id] = self.id.to_s unless self.new_record?
@@ -245,10 +258,10 @@ module QuickBilling
       ret[:amount] = self.amount
       ret[:percent] = self.percent
       ret[:quantity] = self.quantity
-      ret[:product] = self.product.to_api if self.product
-      ret[:product_id] = self.product_id.to_s
-      ret[:coupon] = self.coupon.to_api if self.coupon
-      ret[:coupon_id] = self.coupon_id.to_s
+      ret[:product] = self.product.to_api if self.association(:product).loaded? && self.product
+      ret[:product_id] = self.product_id.present? ? self.product_id.to_s : nil
+      ret[:coupon] = self.coupon.to_api if self.association(:coupon).loaded? && self.coupon
+      ret[:coupon_id] = self.coupon_id.present? ? self.coupon_id.to_s : nil
       ret[:meta] = self.meta
       return ret
     end

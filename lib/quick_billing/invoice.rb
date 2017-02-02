@@ -39,6 +39,8 @@ module QuickBilling
           field :subscription_id, type: Integer
           field :account_id, type: Integer
 
+          field :meta, type: Hash, default: {}
+
           timestamps!
         end
 
@@ -49,8 +51,9 @@ module QuickBilling
         enum_methods! :state, STATES
 
         scope :with_state, lambda {|st|
-          where(st: STATES[st.to_sym])
+          where(state: STATES[st.to_sym])
         }
+
       end
 
       def from_entries
@@ -63,6 +66,24 @@ module QuickBilling
     end
 
     ## INSTANCE METHODS
+
+    def update_as_action!(opts)
+      new_record = self.new_record?
+      if new_record
+        self.state! :open
+        self.account = opts[:account] if opts.key?(:account)
+      end
+
+      self.description = opts[:description] if opts.key?(:description)
+      self.period_start = opts[:period_start] if opts.key?(:period_start)
+      self.period_end = opts[:period_end] if opts.key?(:period_end)
+      self.meta.merge!(opts[:meta]) if opts.key?(:meta)
+
+      success = self.save
+      error = self.error_message
+
+      return {success: success, data: self, error: error, new_record: new_record}
+    end
 
     def parse_entries
       raise "Needs refactoring"
@@ -77,7 +98,7 @@ module QuickBilling
       self.items
     end
 
-    def ordered_items
+    def ordered_entries
       self.entries.sort_by {|e| Entry::SOURCES_SORT_ORDER.index(e.source) || 100 }
     end
 
@@ -126,9 +147,13 @@ module QuickBilling
 
     # TRANSACTIONS
 
-    def charge_to_account!(acct)
+    def charge_to_account!
+      if !self.state?(:open)
+        return {success: false, error: "Invoice is not open."}
+      end
+
       ttl = self.total
-      res = QuickBilling.Transaction.enter_charge!(acct, ttl, {
+      res = QuickBilling.Transaction.enter_charge!(self.account, ttl, {
         invoice: self,
         subscription: self.subscription,
         description: self.description
@@ -136,8 +161,7 @@ module QuickBilling
       if res[:success]
         self.state! :charged
         self.charged_amount = ttl
-        self.save
-        Job.run_later :billing, self, :update_invoice_stats_for_entries
+        self.save(validate: false)
         self.report_event('charged')
       end
       return res
@@ -150,7 +174,7 @@ module QuickBilling
         tr.void!
       end
       self.state! :voided
-      self.save
+      self.save(validate: false)
       self.report_event('voided')
       return {success: true}
     end
@@ -163,22 +187,24 @@ module QuickBilling
       end
     end
 
-    def to_api(opt=:default)
+    def to_api(opt=:full)
       ret = {}
       ret[:id] = self.id.to_s
       ret[:subscription_id] = self.subscription_id ? self.subscription_id.to_s : nil
       ret[:description] = self.description
       ret[:state] = self.state
+      if self.charged_amount.present?
+        ret[:charged_amount] = self.charged_amount
+      end
       ret[:subtotal] = self.subtotal
       ret[:total] = self.total
-      ret[:entries] = self.ordered_entries
+      ret[:entries] = self.ordered_entries.collect{|e| e.to_api}
       ret[:created_at] = self.created_at.to_i
       ret[:period_start] = self.period_start.to_i
       ret[:period_end] = self.period_end.to_i
-
+      ret[:meta] = self.meta
       return ret
     end
-
 
   end
 
