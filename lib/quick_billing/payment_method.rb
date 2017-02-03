@@ -84,7 +84,7 @@ module QuickBilling
     def delete_as_action!(opts)
       opts[:token] = self.token
       res = QuickBilling.platform.delete_payment_method(opts)
-      can_delete = res[:success] || res[:error_code] == QuickBilling::ERROR_TYPES[:resource_not_found]
+      can_delete = res[:success] || res[:error_code] == QuickBilling::ERROR_CODES[:resource_not_found]
       error = nil
       success = true
       if can_delete
