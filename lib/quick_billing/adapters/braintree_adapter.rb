@@ -41,15 +41,17 @@ module QuickBilling
 
       def self.delete_payment_method(opts)
         begin
-          result = Braintree::PaymentMethod.delete(opts[:token])
+          token = opts[:token]
+          result = Braintree::PaymentMethod.delete(token)
           if result == true || result.success?
-            return {success: true, token: pm.token, orig: result}
+            return {success: true, token: token, orig: result}
           else
             return {success: false, error: 'Payment method could not be removed.', orig: result}
           end
         rescue Braintree::NotFoundError => e
           return {success: false, error: "Payment method could not be found.", error_code: QuickBilling::ERROR_CODES[:resource_not_found], orig: result}
         rescue => e
+          QuickScript.log_exception(e)
           return {success: false, error: 'An error occurred removing payment method.', orig: result}
         end
       end
