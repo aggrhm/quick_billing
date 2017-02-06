@@ -70,6 +70,9 @@ module QuickBilling
         self.from_platform_payment_method(pf, pm)
         success = self.save
         error = self.error_message if !success
+        if opts[:set_as_default] || self.account.default_payment_method_id.blank?
+          self.account.update_attribute :default_payment_method_id, self.id
+        end
       end
       return {success: success, data: self, error: error, new_record: true}
     rescue => e
@@ -89,6 +92,10 @@ module QuickBilling
       success = true
       if can_delete
         self.destroy
+        if self.account.default_payment_method_id == self.id
+          nd = self.account.payment_methods.last
+          self.account.update_attribute :default_payment_method_id, (nd ? nd.id : nil)
+        end
       else
         success = false
         error = res[:error]

@@ -156,7 +156,7 @@ module QuickBilling
         pm = QuickBilling.PaymentMethod.find(self.default_payment_method_id)
       end
       if pm.nil?
-        pm = self.payment_methods.first
+        pm = self.payment_methods.last
       end
       return pm
     end
@@ -265,6 +265,7 @@ module QuickBilling
       ret[:balance] = self.balance
       ret[:balance_state] = self.balance_state
       ret[:balance_overdue_at] = self.balance_overdue_at.to_i unless self.balance_overdue_at.nil?
+      ret[:default_payment_method_id] = self.default_payment_method_id ? self.default_payment_method_id.to_s : nil
       #ret[:payment_methods] = self.payment_methods.collect(&:to_api)
       #ret[:active_subscription_ids] = self.active_subscriptions.collect{|s| s.id.to_s}
       return ret
