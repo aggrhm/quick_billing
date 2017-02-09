@@ -1,7 +1,6 @@
 module QuickBilling
 
   module Transaction
-    include QuickBilling::ModelBase
 
     PRIMARY_TYPES = {charge: 1, payment: 2, credit: 3, refund: 4}
     STATES = {entered: 1, processing: 2, completed: 3, void: 4, error: 5}
@@ -13,7 +12,7 @@ module QuickBilling
     module ClassMethods
 
       def quick_billing_transaction!
-        include QuickBilling::ModelBase
+        include QuickScript::Eventable
         include QuickScript::Model
 
         if self.respond_to?(:field)

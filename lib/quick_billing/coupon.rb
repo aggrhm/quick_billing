@@ -6,13 +6,13 @@ module QuickBilling
     STATES = {active: 1, inactive: 2}
 
     def self.included(base)
-      base.send :include, QuickBilling::ModelBase
       base.extend ClassMethods
     end
 
     module ClassMethods
 
       def quick_billing_coupon!
+        include QuickScript::Eventable
         include QuickScript::Model
         if self.respond_to?(:field)
           field :style, type: Integer

@@ -21,7 +21,7 @@ module QuickBilling
     module ClassMethods
 
       def quick_billing_account!
-        include QuickBilling::ModelBase
+        include QuickScript::Eventable
         include QuickScript::Model
         include QuickJobs::Processable
 
@@ -85,7 +85,7 @@ module QuickBilling
     def update_as_action!(opts)
       new_record = self.new_record?
 
-      report_event 'updating', raise_exceptions: true
+      report_event 'updating', opts
 
       success = self.save
       error = self.error_message
@@ -95,7 +95,7 @@ module QuickBilling
             raise "Could not setup customer id"
           end
         end
-        report_event 'updated'
+        report_event 'updated', opts
       end
     rescue => ex
       success = false

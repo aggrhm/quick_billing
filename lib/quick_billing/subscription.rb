@@ -11,7 +11,7 @@ module QuickBilling
     module ClassMethods
 
       def quick_billing_subscription!
-        include QuickBilling::ModelBase
+        include QuickScript::Eventable
         include QuickScript::Model
         include QuickJobs::Processable
 

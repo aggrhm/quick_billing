@@ -1,6 +1,5 @@
 require "money"
 require "quick_billing/version"
-require "quick_billing/model_base"
 require "quick_billing/account"
 require "quick_billing/payment_method"
 require "quick_billing/product"

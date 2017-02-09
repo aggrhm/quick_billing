@@ -5,7 +5,6 @@ module QuickBilling
   # 2. Discounts (percent or amount)
   # 3. Taxes and Fees (not applicable to discounts)
   module Invoice
-    include QuickBilling::ModelBase
 
     STATES = {open: 1, charged: 2, paid: 3, voided: 4}
 
@@ -28,6 +27,7 @@ module QuickBilling
     module ClassMethods
 
       def quick_billing_invoice!
+        include QuickScript::Eventable
         include QuickScript::Model
         if self.respond_to?(:field)
           field :description, type: String

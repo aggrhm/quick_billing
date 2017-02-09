@@ -6,7 +6,6 @@ module QuickBilling
   # assigned to it are still invoiceable and create a new invoice with them, remembering to
   # decrement the invoices_left attribute.
   module Entry
-    include QuickBilling::ModelBase
 
     SOURCES = {discount: 1, tax: 2, prorate: 3, product: 4, general: 5}
     SOURCES_SORT_ORDER = [4, 5, 3, 1, 2]
@@ -14,13 +13,13 @@ module QuickBilling
     CONTEXTS = {invoice: 1, account: 2, subscription: 3}
 
     def self.included(base)
-      base.send :include, QuickBilling::ModelBase
       base.extend ClassMethods
     end
 
     module ClassMethods
 
       def quick_billing_entry!
+        include QuickScript::Eventable
         include QuickScript::Model
         if self.respond_to?(:field)
           field :description, type: String

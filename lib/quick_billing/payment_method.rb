@@ -9,7 +9,7 @@ module QuickBilling
     module ClassMethods
 
       def quick_billing_payment_method!
-        include QuickBilling::ModelBase
+        include QuickScript::Eventable
         include QuickScript::Model
 
         if self.respond_to?(:field)
