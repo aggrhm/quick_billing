@@ -2,7 +2,7 @@ module QuickBilling
 
   module Coupon
 
-    STYLES = {subscription: 1, invoice: 1, account: 2}
+    STYLES = {invoice: 1, transaction: 2}
     STATES = {active: 1, inactive: 2}
 
     def self.included(base)
@@ -31,6 +31,9 @@ module QuickBilling
         scope :with_source, lambda {|src|
           where(source: src)
         }
+        scope :active, lambda {
+          where(state: 1)
+        }
 
         enum_methods! :state, STATES
         enum_methods! :style, STYLES
@@ -40,45 +43,50 @@ module QuickBilling
           self.errors.add(:title, "Title cannot be blank.") if self.title.blank?
           self.errors.add(:code, "Code cannot be blank.") if self.code.blank?
           self.errors.add(:state, "State cannot be blank.") if self.state.blank?
+          self.errors.add(:amount, "Amount and percent cannot be blank.") if amount.blank? && percent.blank?
+          self.errors.add(:amount, "Amount must be less than 0.") if amount.present? && amount >= 0
+          self.errors.add(:percent, "Percent must be less than 0.") if percent.present? && percent >= 0
         end
-      end
-
-      def find_with_code(code)
-        where(code: code.strip).first || find(code)
       end
 
       def generate_code(len=8)
         SecureRandom.urlsafe_base64((len + 2)).gsub(/[^a-zA-Z0-9]/, "0")[0..(len-1)]
       end
 
+
     end
 
     ## INSTANCE METHODS
 
-    def register!(opts)
-      self.style!( (opts[:style] || :invoice) )
+    def update_as_action!(opts)
+      new_record = self.new_record?
+      if new_record
+        self.style! :invoice
+        self.state! :active
+        self.style = opts[:style] if opts.key?(:style)
+        self.max_uses = 1
+        self.code = opts[:code] || self.class.generate_code
+      end
       self.title = opts[:title].strip if opts[:title]
       self.source = opts[:source].to_s.strip.downcase if opts[:source]
-      self.amount = opts[:amount]
-      self.percent = opts[:percent]
-      self.max_redemptions = opts[:max_redemptions] ? opts[:max_redemptions].to_i : nil
-      self.max_uses = opts[:max_uses] ? opts[:max_uses].to_i : 1
+      self.amount = opts[:amount].to_i if opts.key?(:amount)
+      self.percent = opts[:percent] if opts.key?(:percent)
+      self.max_redemptions = opts[:max_redemptions].to_i if opts.key?(:max_redemptions)
+      self.max_uses = opts[:max_uses].to_i if opts.key?(:max_uses)
       self.meta.merge!(opts[:meta]) if opts[:meta].is_a?(Hash)
 
-      self.code = opts[:code] || self.class.generate_code
-      self.state! :active
       success = self.save
-      return {success: success, data: self, error: self.error_message}
+      return {success: success, data: self, error: self.error_message, new_record: new_record}
     end
 
     # ACCESSORS
 
     def invoiceable?
-      self.style?(:invoice) || self.style?(:subscription)
+      self.style?(:invoice)
     end
 
     def transactionable?
-      self.style?(:account)
+      self.style?(:transaction)
     end
 
     def redemptions
@@ -97,11 +105,9 @@ module QuickBilling
 
     def redeemable_by_account?(aid)
       return false if !(self.state?(:active) && self.redeemable?)
-      if self.max_uses == nil
-        return true
-      else
-        return self.times_redeemed_by_account(aid) < self.max_uses
-      end
+      # check if any account entries
+      return false if QuickBilling.Entry.for_coupon(self.id).where(context: 2).is_valid.for_account(aid).count > 0
+      return true
     end
 
     def times_redeemed_by_account(aid)
@@ -124,6 +130,7 @@ module QuickBilling
       ret[:amount] = self.amount
       ret[:percent] = self.percent
       ret[:max_uses] = self.max_uses
+      ret[:created_at] = self.created_at.to_i
       return ret
     end
 

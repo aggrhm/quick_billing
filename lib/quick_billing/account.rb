@@ -95,7 +95,7 @@ module QuickBilling
             raise "Could not setup customer id"
           end
         end
-        report_event 'updated', opts
+        report_event 'updated', new_record: new_record
       end
     rescue => ex
       success = false
@@ -104,7 +104,9 @@ module QuickBilling
     ensure
       return {success: success, data: self, error: error, new_record: new_record}
     end
-    
+
+    # ACCESSORS
+
     # returns first active subscription
     def active_subscription(reload=false)
       self.active_subscriptions(reload).first
@@ -116,8 +118,6 @@ module QuickBilling
       end
       @active_subscriptions
     end
-
-    # ACCESSORS
 
     def balance_state
       if self.balance > 200 && self.is_balance_overdue?
@@ -195,7 +195,7 @@ module QuickBilling
         self.balance_overdue_at = nil
       elsif self.balance_overdue_at.nil? && new_bal > 0
         # if new balance is positive, set balance_overdue_at
-        self.balance_overdue_at = Time.now + 3.days
+        self.balance_overdue_at = Time.now + balance_overdue_grace_period
       end
 
       self.balance = new_bal
@@ -259,12 +259,16 @@ module QuickBilling
       end
     end
 
+    def balance_overdue_grace_period
+      return 3.days
+    end
+
     def to_api(opt=:full)
       ret = {}
       ret[:id] = self.id.to_s
       ret[:balance] = self.balance
       ret[:balance_state] = self.balance_state
-      ret[:balance_overdue_at] = self.balance_overdue_at.to_i unless self.balance_overdue_at.nil?
+      ret[:balance_overdue_at] = self.balance_overdue_at.present? ? self.balance_overdue_at.to_i : nil
       ret[:default_payment_method_id] = self.default_payment_method_id ? self.default_payment_method_id.to_s : nil
       #ret[:payment_methods] = self.payment_methods.collect(&:to_api)
       #ret[:active_subscription_ids] = self.active_subscriptions.collect{|s| s.id.to_s}

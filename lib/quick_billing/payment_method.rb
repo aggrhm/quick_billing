@@ -70,6 +70,7 @@ module QuickBilling
         self.from_platform_payment_method(pf, pm)
         success = self.save
         error = self.error_message if !success
+        report_event 'updated', new_record: new_record
         if opts[:set_as_default] || self.account.default_payment_method_id.blank?
           self.account.update_attribute :default_payment_method_id, self.id
         end

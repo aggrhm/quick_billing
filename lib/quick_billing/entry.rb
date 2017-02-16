@@ -1,6 +1,6 @@
 module QuickBilling
 
-  # This model represents a billable item pre-invoice. By specifying the invoice_limit and
+  # This model represents a billable item pre-invoice. By specifying the invoices_limit and
   # invoices_left, we can use these to generate each invoice, knowing which Entries are
   # still invoiceable (recurring or once). Any parent model should determine which Entries
   # assigned to it are still invoiceable and create a new invoice with them, remembering to
@@ -22,15 +22,15 @@ module QuickBilling
         include QuickScript::Eventable
         include QuickScript::Model
         if self.respond_to?(:field)
-          field :description, type: String
-          field :state, type: Integer, default: 1
           field :context, type: Integer
           field :source, type: Integer
+          field :state, type: Integer, default: 1
+          field :description, type: String
           field :amount, type: Integer
           field :percent, type: Integer
-          field :invoices_left, type: Integer, default: 0
-          field :invoice_count, type: Integer, default: 0    # invoice count
-          field :invoice_limit, type: Integer, default: 1
+          field :cached_invoices_left, type: Integer, default: 0
+          field :cached_invoices_count, type: Integer, default: 0    # invoice count
+          field :invoices_limit, type: Integer, default: 1
           field :quantity, type: Integer, default: 1
           field :meta, type: Hash, default: {}
 
@@ -65,6 +65,9 @@ module QuickBilling
         scope :for_account, lambda {|aid|
           where(account_id: aid)
         }
+        scope :with_account_id, lambda {|aid|
+          where(account_id: aid)
+        }
         scope :for_subscription, lambda {|sid|
           where(subscription_id: sid)
         }
@@ -81,13 +84,19 @@ module QuickBilling
           where(source: SOURCES[:product])
         }
         scope :is_valid, lambda {
-          where("state != 2")
+          where("state = 1")
+        }
+        scope :with_source, lambda {|s|
+          where(source: s)
+        }
+        scope :with_context, lambda {|c|
+          where(context: c)
         }
         scope :invoiceable, lambda {
           is_valid.where("invoices_left is null OR invoices_left > 0")
         }
         scope :invoiced, lambda {
-          where("invoice_count > 0")
+          includes(:invoice).where(context: 1, state: 1).where(invoices: {state: [2,3]})
         }
 
         validate do
@@ -127,21 +136,6 @@ module QuickBilling
         return e
       end
 
-      def build_from_coupon(coupon)
-        coupon = QuickBilling.Coupon.find_with_code(coupon) unless coupon.is_a?(QuickBilling.Coupon)
-        return nil if coupon.nil?
-        e = self.new
-        e.source! :discount
-        e.coupon = coupon
-        e.description = "Coupon (#{coupon.code})"
-        e.amount = coupon.amount
-        e.percent = coupon.percent
-        e.invoices_left = coupon.max_uses
-        e.invoice_limit = coupon.max_uses
-        e.state! :valid
-        return e
-      end
-
       def build_from_product(product, quantity)
         product = QuickBilling.Product.find(product) unless product.is_a?(QuickBilling.Product)
         return nil if product.nil?
@@ -155,6 +149,49 @@ module QuickBilling
         return e
       end
 
+      def enter_coupon_for_account_as_action!(opts)
+        success = false
+        error = nil
+        error_type = nil
+        e = nil
+        # find coupon
+        coupon = QuickBilling.Coupon.find_by_code(opts[:coupon_code])
+        if coupon.nil?
+          error_type = "CouponNotFound"
+          raise "Coupon could not be found."
+        end
+        # find account
+        acct = QuickBilling.Account.find(opts[:account_id])
+        if !coupon.redeemable_by_account?(acct.id)
+          error_type = "CouponNotRedeemable"
+          raise "This coupon is not redeemable by this account."
+        end
+        # determine if coupon can be redeemed by account
+        e = self.new
+        e.context! :account
+        e.source! :discount
+        e.state! :valid
+        e.description = coupon.title
+        e.amount = coupon.amount
+        e.percent = coupon.percent
+        e.invoices_limit = coupon.max_uses
+        e.cached_invoices_left = coupon.max_uses
+        e.account = acct
+        e.coupon = coupon
+        success = e.save
+        if !success
+          error = e.error_message
+          error_type = "CouponNotSaved"
+        end
+      rescue => ex
+        QuickScript.log_exception(ex)
+        success = false
+        error ||= ex.message
+        error_type ||= "Error"
+      ensure
+        return {success: success, data: e, error: error, error_type: error_type, new_record: true}
+      end
+
     end
 
     def update_as_action!(opts)
@@ -166,6 +203,8 @@ module QuickBilling
         self.invoice = opts[:invoice] if opts.key?(:invoice)
         self.context = opts[:context] if opts.key?(:context)
         self.source = opts[:source] if opts.key?(:source)
+        self.entry = opts[:entry] if opts.key?(:entry)
+        self.coupon = opts[:coupon] if opts.key?(:coupon)
       end
 
       self.description = opts[:description] if opts.key?(:description)
@@ -173,6 +212,7 @@ module QuickBilling
       self.period_end = opts[:period_end] if opts.key?(:period_end)
       self.quantity = opts[:quantity].to_i if opts.key?(:quantity)
       self.amount = opts[:amount].to_i if opts.key?(:amount)
+      self.percent = opts[:percent].to_i if opts.key?(:percent)
       self.meta.merge!(opts[:meta]) if opts.key?(:meta)
 
       success = self.save
@@ -186,27 +226,47 @@ module QuickBilling
     end
 
     def invoiced?
-      self.invoice_count(true) > 0
+      self.invoices_count > 0
     end
 
     def invoiceable?(reload=false)
       return false if self.state?(:voided)
-      return true if self.invoice_limit.nil?
-      return self.invoice_count(reload) < self.invoice_limit
+      return true if self.invoices_limit.nil?
+      return self.invoices_count < self.invoices_limit
     end
 
-    def invoice_count(reload=false)
-      if reload || self.ic.nil?
-        # TODO: Need to look up Entries linked to this one that have invoice_id
-        raise "Needs fixing"
-        #count = QuickBilling.Invoice.is_state(:charged).with_entry(self.id).count
-        if !self.invoice_limit.nil?
-          self.invoices_left = self.invoice_limit - count
-        end
-        self[:invoice_count] = count
-        self.save_if_persisted
-      end
-      self[:invoice_count]
+    def invoices_left
+      check_invoices!
+      return cached_invoices_left
+    end
+
+    def invoices_count
+      check_invoices!
+      return cached_invoices_count
+    end
+
+    def check_invoices!
+      count = self.class.invoiced.where(entry_id: self.id).count
+      self.cached_invoices_count = count
+      self.cached_invoices_left = invoices_limit.present? ? invoices_limit - count : nil
+      self.save(validate: false)
+    end
+
+    def add_to_invoice!(inv)
+      e = self.class.new
+      res = e.update_as_action!({
+        account: self.account,
+        coupon: self.coupon,
+        invoice: inv,
+        entry: self,
+        source: self.source,
+        context: CONTEXTS[:invoice],
+        description: self.description,
+        quantity: self.quantity,
+        amount: self.amount,
+        percent: self.percent
+      })
+      return res
     end
 
     def save_if_persisted
@@ -235,7 +295,8 @@ module QuickBilling
       else
         ret = 0
       end
-      return ret + self.amount * self.quantity
+      @total_amount = ret + self.amount * self.quantity
+      return @total_amount
     end
 
     def adjustment_str
@@ -261,6 +322,9 @@ module QuickBilling
       ret[:product_id] = self.product_id.present? ? self.product_id.to_s : nil
       ret[:coupon] = self.coupon.to_api if self.association(:coupon).loaded? && self.coupon
       ret[:coupon_id] = self.coupon_id.present? ? self.coupon_id.to_s : nil
+      ret[:invoices_left] = self.cached_invoices_left
+      ret[:invoices_count] = self.cached_invoices_count
+      ret[:total_amount] = @total_amount if !@total_amount.nil?
       ret[:meta] = self.meta
       return ret
     end
